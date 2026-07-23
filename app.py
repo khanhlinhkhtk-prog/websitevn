@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, Response
+from flask import Flask, render_template, request, redirect, url_for, Response, g, has_request_context
 import json, os, re, unicodedata, math, time
 import html as html_lib
 from PIL import Image
@@ -17,6 +17,13 @@ from threading import Lock
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
+
+
+@app.teardown_appcontext
+def close_exam_db_connection(error=None):
+    conn = getattr(g, "_exam_db_conn", None)
+    if conn is not None:
+        conn.close()
 
 # Cấu hình thư mục upload
 UPLOAD_FOLDER = os.path.join('static', 'uploads')
@@ -306,7 +313,7 @@ def normalize_database_url(url):
     return url
 
 
-def get_exam_db_connection():
+def create_exam_db_connection():
     try:
         import psycopg2
     except ImportError as exc:
@@ -319,6 +326,26 @@ def get_exam_db_connection():
     if "sslmode=" not in dsn:
         kwargs["sslmode"] = DATABASE_SSLMODE
     return psycopg2.connect(dsn, **kwargs)
+
+
+def get_exam_db_connection():
+    if has_request_context():
+        conn = getattr(g, "_exam_db_conn", None)
+        if conn is None or conn.closed:
+            conn = create_exam_db_connection()
+            g._exam_db_conn = conn
+        return conn
+    return create_exam_db_connection()
+
+
+def get_exam_collection_cache():
+    if not has_request_context():
+        return None
+    cache = getattr(g, "_exam_collection_cache", None)
+    if cache is None:
+        cache = {}
+        g._exam_collection_cache = cache
+    return cache
 
 
 def ensure_exam_store_table():
@@ -364,10 +391,16 @@ def normalize_collection_payload(data, fallback, expected_type=None):
 
 
 def load_exam_collection(collection, path, fallback, expected_type=None):
-    fallback_data = read_json_file(path, fallback)
-    fallback_data = normalize_collection_payload(fallback_data, fallback, expected_type)
+    cache = get_exam_collection_cache()
+    if cache is not None and collection in cache:
+        return cache[collection]
+
     if not exam_db_enabled():
-        return fallback_data
+        data = read_json_file(path, fallback)
+        data = normalize_collection_payload(data, fallback, expected_type)
+        if cache is not None:
+            cache[collection] = data
+        return data
 
     ensure_exam_store_table()
     with get_exam_db_connection() as conn:
@@ -378,9 +411,14 @@ def load_exam_collection(collection, path, fallback, expected_type=None):
             )
             row = cur.fetchone()
             if row:
-                return normalize_collection_payload(row[0], fallback, expected_type)
+                data = normalize_collection_payload(row[0], fallback, expected_type)
+                if cache is not None:
+                    cache[collection] = data
+                return data
 
             from psycopg2.extras import Json
+            fallback_data = read_json_file(path, fallback)
+            fallback_data = normalize_collection_payload(fallback_data, fallback, expected_type)
             cur.execute(
                 """
                 INSERT INTO exam_system_store (collection, payload, updated_at)
@@ -390,10 +428,16 @@ def load_exam_collection(collection, path, fallback, expected_type=None):
                 """,
                 (collection, Json(fallback_data))
             )
+            if cache is not None:
+                cache[collection] = fallback_data
             return fallback_data
 
 
 def save_exam_collection(collection, path, data):
+    cache = get_exam_collection_cache()
+    if cache is not None:
+        cache[collection] = data
+
     if not exam_db_enabled():
         write_json_file(path, data)
         return
