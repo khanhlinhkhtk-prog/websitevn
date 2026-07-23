@@ -292,6 +292,14 @@ EXAM_EXAMS_FILE = os.path.join('data', 'exam_system_exams.json')
 EXAM_SUBMISSIONS_FILE = os.path.join('data', 'exam_system_submissions.json')
 EXAM_MATERIALS_FILE = os.path.join('data', 'exam_system_materials.json')
 EXAM_CLASSES_FILE = os.path.join('data', 'exam_system_classes.json')
+EXAM_COLLECTION_CONFIG = {
+    'users': (EXAM_USERS_FILE, {"students": [], "teachers": [], "parents": []}, dict),
+    'classes': (EXAM_CLASSES_FILE, [], list),
+    'lessons': (EXAM_LESSONS_FILE, [], list),
+    'exams': (EXAM_EXAMS_FILE, [], list),
+    'submissions': (EXAM_SUBMISSIONS_FILE, [], list),
+    'materials': (EXAM_MATERIALS_FILE, [], list),
+}
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DATABASE_URL")
 DATABASE_SSLMODE = os.environ.get("DATABASE_SSLMODE", "require")
 ADMIN_USERNAME = os.environ.get("EXAM_ADMIN_USERNAME", "admin")
@@ -390,6 +398,51 @@ def normalize_collection_payload(data, fallback, expected_type=None):
     return data
 
 
+def preload_exam_collections(cache):
+    if cache is None or cache.get("__bulk_loaded"):
+        return
+
+    ensure_exam_store_table()
+    collection_names = list(EXAM_COLLECTION_CONFIG.keys())
+    with get_exam_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT collection, payload
+                FROM exam_system_store
+                WHERE collection = ANY(%s)
+                """,
+                (collection_names,)
+            )
+            rows = {collection: payload for collection, payload in cur.fetchall()}
+
+            missing_rows = []
+            for collection, (path, fallback, expected_type) in EXAM_COLLECTION_CONFIG.items():
+                if collection in rows:
+                    payload = normalize_collection_payload(rows[collection], fallback, expected_type)
+                else:
+                    payload = read_json_file(path, fallback)
+                    payload = normalize_collection_payload(payload, fallback, expected_type)
+                    missing_rows.append((collection, payload))
+
+                if collection not in cache:
+                    cache[collection] = payload
+
+            if missing_rows:
+                from psycopg2.extras import Json
+                cur.executemany(
+                    """
+                    INSERT INTO exam_system_store (collection, payload, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (collection)
+                    DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+                    """,
+                    [(collection, Json(payload)) for collection, payload in missing_rows]
+                )
+
+    cache["__bulk_loaded"] = True
+
+
 def load_exam_collection(collection, path, fallback, expected_type=None):
     cache = get_exam_collection_cache()
     if cache is not None and collection in cache:
@@ -401,6 +454,11 @@ def load_exam_collection(collection, path, fallback, expected_type=None):
         if cache is not None:
             cache[collection] = data
         return data
+
+    if cache is not None:
+        preload_exam_collections(cache)
+        if collection in cache:
+            return cache[collection]
 
     ensure_exam_store_table()
     with get_exam_db_connection() as conn:
