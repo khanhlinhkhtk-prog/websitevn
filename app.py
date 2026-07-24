@@ -150,6 +150,43 @@ def sanitize_gemini_error(error):
     return message[:500]
 
 
+def get_gemini_text(response, fallback_message=None):
+    """Lấy text từ Gemini response mà không làm vỡ route khi response rỗng."""
+    fallback_message = fallback_message or (
+        "Tri-hand chưa nhận được nội dung trả lời từ AI. Em thử gửi lại câu hỏi "
+        "hoặc gửi file rõ hơn nhé."
+    )
+
+    text = getattr(response, "text", None)
+    if text:
+        return text
+
+    chunks = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", []) or []:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                chunks.append(part_text)
+
+    if chunks:
+        return "\n".join(chunks)
+
+    finish_reasons = []
+    for candidate in getattr(response, "candidates", []) or []:
+        reason = getattr(candidate, "finish_reason", None)
+        if reason:
+            finish_reasons.append(str(reason))
+
+    if finish_reasons:
+        return (
+            f"{fallback_message}\n\n"
+            f"Lý do kỹ thuật từ AI: {', '.join(finish_reasons)}."
+        )
+
+    return fallback_message
+
+
 class GeminiKeyRotationError(Exception):
     pass
 
@@ -5250,7 +5287,11 @@ Hãy ưu tiên sử dụng thông tin từ KIẾN THỨC CƠ SỞ khi trả lờ
                             full_prompt += f"\n\n{image_source_note}"
                             prompt_parts = docx_images + [full_prompt]
                     response = model.generate_content(prompt_parts)
-                    response_text = response.text
+                    response_text = get_gemini_text(
+                        response,
+                        "Tri-hand đã nhận file nhưng AI chưa trả về nội dung đọc được. "
+                        "Em thử gửi lại file rõ hơn, hoặc đổi DOCX sang PDF rồi gửi lại nhé."
+                    )
 
                 elif file_ext in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
                     # Đọc ảnh
@@ -5268,7 +5309,11 @@ QUAN TRỌNG:
 Câu hỏi thêm: {user_message if user_message else 'Hãy phân tích kiến thức liên quan và hướng dẫn em'}
 """
                     response = model.generate_content([img, full_prompt])
-                    response_text = response.text
+                    response_text = get_gemini_text(
+                        response,
+                        "Tri-hand đã nhận ảnh nhưng AI chưa đọc được nội dung. "
+                        "Em thử gửi ảnh rõ hơn hoặc cắt gần phần bài cần hỏi nhé."
+                    )
 
                 else:
                     response_text = "Định dạng file không được hỗ trợ. Em có thể gửi ảnh (.png, .jpg, .jpeg), PDF, DOCX hoặc TXT."
@@ -5284,7 +5329,7 @@ Câu hỏi thêm: {user_message if user_message else 'Hãy phân tích kiến th
                 if user_message:
                     full_prompt = f"{system_prompt}\n\nHọc sinh hỏi: {user_message}\n\nLƯU Ý: Chỉ hướng dẫn phương pháp, không đưa đáp án trực tiếp."
                     response = model.generate_content([full_prompt])
-                    response_text = response.text
+                    response_text = get_gemini_text(response)
                 else:
                     response_text = "Vui lòng nhập câu hỏi hoặc gửi file."
 
@@ -6565,6 +6610,10 @@ def clean_ai_output(text):
     Làm sạch output của AI để hiển thị đẹp hơn
     """
     import re
+
+    if text is None:
+        return ''
+    text = str(text)
 
     # Loại bỏ các dấu markdown không mong muốn
     text = re.sub(r'\*\*\*', '', text)  # Loại bỏ ***
