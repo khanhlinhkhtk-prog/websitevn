@@ -628,7 +628,7 @@
                                 <span>📄</span>
                                 <span>Đọc tài liệu PDF</span>
                             </div>
-                            <div class="example-text">Gửi file PDF để tóm tắt nội dung hoặc giải đáp thắc mắc</div>
+                            <div class="example-text">Gửi PDF, DOCX hoặc TXT để tóm tắt bài học, phân tích đề và tạo sơ đồ</div>
                         </div>
                         <div class="example-card">
                             <div class="example-title">
@@ -665,7 +665,7 @@
                     <div class="input-box">
                         <label class="attach-btn" title="Đính kèm file">
                             📎
-                            <input type="file" name="file" id="fileInput" accept=".png,.jpg,.jpeg,.pdf" onchange="showFilePreview()">
+                            <input type="file" name="file" id="fileInput" accept=".png,.jpg,.jpeg,.pdf,.docx,.txt" onchange="showFilePreview()">
                         </label>
                         
                         <textarea 
@@ -714,19 +714,24 @@
             const fileInput = document.getElementById('fileInput');
             const filePreviewArea = document.getElementById('filePreviewArea');
             const fileInfo = document.getElementById('fileInfo');
+            const sendBtn = document.getElementById('sendBtn');
             
             if (fileInput.files.length > 0) {
                 fileInfo.textContent = '📎 ' + fileInput.files[0].name;
                 filePreviewArea.classList.add('active');
+                sendBtn.disabled = false;
             }
         }
 
         function removeFile() {
             const fileInput = document.getElementById('fileInput');
             const filePreviewArea = document.getElementById('filePreviewArea');
+            const messageInput = document.getElementById('messageInput');
+            const sendBtn = document.getElementById('sendBtn');
             
             fileInput.value = '';
             filePreviewArea.classList.remove('active');
+            sendBtn.disabled = messageInput.value.trim() === '';
         }
 
         const messageInput = document.getElementById('messageInput');

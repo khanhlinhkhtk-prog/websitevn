@@ -2920,7 +2920,9 @@ def student_my_submissions():
 
 
 #################
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'pdf'}
+ALLOWED_EXTENSIONS = {
+    'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'pdf', 'docx', 'txt'
+}
 
 
 def allowed_file(filename):
@@ -2940,6 +2942,87 @@ def extract_text_from_pdf(pdf_path):
         return text
     except Exception as e:
         return f"Lỗi khi đọc PDF: {str(e)}"
+
+
+def extract_text_from_docx(docx_path):
+    """Trích xuất text từ file DOCX bằng mammoth."""
+    try:
+        with open(docx_path, 'rb') as docx_file:
+            result = mammoth.extract_raw_text(docx_file)
+        return (result.value or '').strip()
+    except Exception as e:
+        return f"Lỗi khi đọc DOCX: {str(e)}"
+
+
+def extract_text_from_txt(txt_path):
+    """Đọc file TXT với một vài encoding phổ biến để tránh lỗi tiếng Việt."""
+    for encoding in ('utf-8-sig', 'utf-8', 'cp1258', 'cp1252'):
+        try:
+            with open(txt_path, 'r', encoding=encoding) as text_file:
+                return text_file.read().strip()
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            return f"Lỗi khi đọc TXT: {str(e)}"
+
+    try:
+        with open(txt_path, 'r', encoding='utf-8', errors='replace') as text_file:
+            return text_file.read().strip()
+    except Exception as e:
+        return f"Lỗi khi đọc TXT: {str(e)}"
+
+
+def extract_text_from_chatbot_file(file_path, file_ext):
+    """Trả về nội dung text từ các file học liệu chatbot hỗ trợ."""
+    if file_ext == 'pdf':
+        return extract_text_from_pdf(file_path)
+    if file_ext == 'docx':
+        return extract_text_from_docx(file_path)
+    if file_ext == 'txt':
+        return extract_text_from_txt(file_path)
+    return ''
+
+
+def build_chatbot_file_analysis_prompt(system_prompt, file_text, user_message,
+                                       filename):
+    trimmed_text = (file_text or '').strip()
+    question = user_message or (
+        'Hãy tóm tắt, phân tích kiến thức liên quan và gợi ý sơ đồ tư duy từ file này.'
+    )
+
+    if not trimmed_text:
+        return f"""{system_prompt}
+
+Học sinh gửi file "{filename}" nhưng hệ thống chưa trích xuất được nội dung chữ.
+Câu hỏi của học sinh: {question}
+
+Hãy trả lời thân thiện rằng em cần gửi file rõ hơn hoặc ảnh/PDF có chữ đọc được, không bịa nội dung file.
+"""
+
+    return f"""{system_prompt}
+
+Học sinh gửi file "{filename}" với nội dung trích xuất bên dưới.
+
+NHIỆM VỤ:
+- Nếu file là đề kiểm tra/bài tập: không chỉ đưa đáp án, hãy nhận diện các dạng bài, kiến thức liên quan, công thức cần nhớ và phương pháp giải.
+- Nếu file là bài học/ghi chú: tóm tắt ý chính, rút ra khái niệm trọng tâm, công thức và ví dụ ôn tập.
+- Nếu học sinh hỏi thêm, hãy ưu tiên trả lời đúng theo câu hỏi đó dựa trên nội dung file.
+- Trình bày đủ các mục sau bằng tiếng Việt có dấu:
+  1. Tóm tắt nội dung
+  2. Các mạch kiến thức liên quan
+  3. Công thức cần nhớ
+  4. Phương pháp giải theo dạng bài
+  5. Lỗi sai thường gặp
+  6. Lộ trình ôn tập ngắn
+  7. Gợi ý nhánh sơ đồ tư duy
+- Công thức Toán phải viết LaTeX rõ ràng để MathJax hiển thị, ví dụ \\(a^2 + b^2 = c^2\\). Không viết sai ký hiệu toán học.
+- Với đề kiểm tra, chỉ giải thích hướng làm và kiến thức nền; không biến toàn bộ phản hồi thành đáp án hoàn chỉnh nếu học sinh chưa làm.
+
+Câu hỏi của học sinh: {question}
+
+NỘI DUNG FILE:
+{trimmed_text[:12000]}
+"""
 
 
 ####
@@ -4603,7 +4686,7 @@ def chatbot():
         user_message = request.form.get('message', '').strip()
         uploaded_file = request.files.get('file')
         is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-        user_display = user_message if user_message else '[Da gui file]'
+        user_display = user_message if user_message else '[Đã gửi file]'
 
         # Đọc dữ liệu từ data.txt
         knowledge_base = ""
@@ -4684,31 +4767,46 @@ Hãy ưu tiên sử dụng thông tin từ KIẾN THỨC CƠ SỞ khi trả lờ
         try:
             # Xử lý nếu có file đính kèm
             if uploaded_file and uploaded_file.filename != '':
-                file_ext = uploaded_file.filename.rsplit('.', 1)[1].lower()
+                original_filename = uploaded_file.filename
+                file_ext = original_filename.rsplit(
+                    '.', 1)[1].lower() if '.' in original_filename else ''
 
                 # Lưu file tạm
-                temp_filename = f"temp_{uuid.uuid4()}_{secure_filename(uploaded_file.filename)}"
+                temp_filename = f"temp_{uuid.uuid4()}_{secure_filename(original_filename)}"
                 temp_path = os.path.join(app.config['UPLOAD_FOLDER'],
                                          temp_filename)
                 uploaded_file.save(temp_path)
 
                 # Xử lý theo loại file
-                if file_ext == 'pdf':
-                    # Đọc text từ PDF
-                    pdf_text = extract_text_from_pdf(temp_path)
-                    full_prompt = f"{system_prompt}\n\nHọc sinh gửi file PDF với nội dung:\n{pdf_text}\n\nCâu hỏi: {user_message if user_message else 'Hãy phân tích nội dung file này và hướng dẫn cách làm'}"
+                if file_ext in ['pdf', 'docx', 'txt']:
+                    file_text = extract_text_from_chatbot_file(
+                        temp_path, file_ext)
+                    full_prompt = build_chatbot_file_analysis_prompt(
+                        system_prompt, file_text, user_message,
+                        original_filename)
                     response = model.generate_content([full_prompt])
                     response_text = response.text
 
                 elif file_ext in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
                     # Đọc ảnh
                     img = Image.open(temp_path)
-                    full_prompt = f"{system_prompt}\n\nHọc sinh gửi ảnh bài tập/đề thi.\n\nQUAN TRỌNG: Hãy kiểm tra kỹ xem học sinh đã làm bài chưa (có đánh dấu, khoanh tròn, ghi đáp án không).\n- Nếu ĐÃ LÀM: Chấm bài, chỉ ra đúng/sai và giải thích.\n- Nếu CHƯA LÀM: CHỈ hướng dẫn phương pháp, KHÔNG cho đáp án.\n\nCâu hỏi thêm: {user_message if user_message else 'Hãy phân tích và hướng dẫn em'}"
+                    full_prompt = f"""{system_prompt}
+
+Học sinh gửi ảnh bài tập/đề thi.
+
+QUAN TRỌNG:
+- Hãy kiểm tra kỹ xem học sinh đã làm bài chưa (có đánh dấu, khoanh tròn, ghi đáp án không).
+- Nếu ĐÃ LÀM: chấm bài, chỉ ra đúng/sai và giải thích ngắn.
+- Nếu CHƯA LÀM hoặc đây là đề kiểm tra trắng: không cho đáp án trực tiếp; hãy phân tích các dạng bài, kiến thức liên quan, công thức cần nhớ và phương pháp giải.
+- Nếu học sinh yêu cầu tóm tắt/tạo sơ đồ tư duy từ ảnh, hãy nêu rõ các nhánh kiến thức có thể đưa vào sơ đồ.
+
+Câu hỏi thêm: {user_message if user_message else 'Hãy phân tích kiến thức liên quan và hướng dẫn em'}
+"""
                     response = model.generate_content([img, full_prompt])
                     response_text = response.text
 
                 else:
-                    response_text = "Định dạng file không được hỗ trợ. Chỉ chấp nhận ảnh (.png, .jpg, .jpeg) hoặc PDF."
+                    response_text = "Định dạng file không được hỗ trợ. Em có thể gửi ảnh (.png, .jpg, .jpeg), PDF, DOCX hoặc TXT."
 
                 # Xóa file tạm
                 try:
