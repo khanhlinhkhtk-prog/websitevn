@@ -1,6 +1,9 @@
 from flask import Flask, render_template, request, redirect, url_for, Response, g, has_request_context
-import json, os, re, unicodedata, math, time
+import json, os, re, unicodedata, math, time, shutil, subprocess, tempfile
 import html as html_lib
+from io import BytesIO
+from zipfile import BadZipFile, ZipFile
+
 from PIL import Image
 from google import genai
 import uuid
@@ -2944,12 +2947,313 @@ def extract_text_from_pdf(pdf_path):
         return f"Lỗi khi đọc PDF: {str(e)}"
 
 
+def xml_local_name(tag):
+    return tag.rsplit('}', 1)[-1] if '}' in tag else tag
+
+
+def omml_child(element, child_name):
+    for child in list(element):
+        if xml_local_name(child.tag) == child_name:
+            return child
+    return None
+
+
+def omml_attr(element, attr_name, default=''):
+    if element is None:
+        return default
+
+    for key, value in element.attrib.items():
+        if xml_local_name(key) == attr_name:
+            return value
+
+    return default
+
+
+def omml_text(element):
+    if element is None:
+        return ''
+
+    tag_name = xml_local_name(element.tag)
+
+    if tag_name == 't':
+        return element.text or ''
+
+    if tag_name == 'r':
+        return ''.join(
+            child.text or '' for child in element.iter()
+            if xml_local_name(child.tag) == 't'
+        )
+
+    if tag_name == 'f':
+        numerator = omml_text(omml_child(element, 'num'))
+        denominator = omml_text(omml_child(element, 'den'))
+        return f"\\frac{{{numerator}}}{{{denominator}}}"
+
+    if tag_name == 'sSup':
+        base = omml_text(omml_child(element, 'e'))
+        sup = omml_text(omml_child(element, 'sup'))
+        return f"{base}^{{{sup}}}"
+
+    if tag_name == 'sSub':
+        base = omml_text(omml_child(element, 'e'))
+        sub = omml_text(omml_child(element, 'sub'))
+        return f"{base}_{{{sub}}}"
+
+    if tag_name == 'sSubSup':
+        base = omml_text(omml_child(element, 'e'))
+        sub = omml_text(omml_child(element, 'sub'))
+        sup = omml_text(omml_child(element, 'sup'))
+        return f"{base}_{{{sub}}}^{{{sup}}}"
+
+    if tag_name == 'rad':
+        base = omml_text(omml_child(element, 'e'))
+        degree = omml_text(omml_child(element, 'deg'))
+        return f"\\sqrt[{degree}]{{{base}}}" if degree else f"\\sqrt{{{base}}}"
+
+    if tag_name == 'd':
+        dpr = omml_child(element, 'dPr')
+        begin = omml_attr(omml_child(dpr, 'begChr'), 'val', '(')
+        end = omml_attr(omml_child(dpr, 'endChr'), 'val', ')')
+        return f"{begin}{omml_text(omml_child(element, 'e'))}{end}"
+
+    if tag_name == 'func':
+        fname = omml_text(omml_child(element, 'fName'))
+        expr = omml_text(omml_child(element, 'e'))
+        return f"\\{fname}({expr})" if fname in {'sin', 'cos', 'tan', 'cot', 'log', 'ln'} else f"{fname}({expr})"
+
+    if tag_name == 'nary':
+        nary_pr = omml_child(element, 'naryPr')
+        symbol = omml_attr(omml_child(nary_pr, 'chr'), 'val', '∑')
+        symbol_map = {'∑': '\\sum', '∫': '\\int', '∏': '\\prod', '⋂': '\\cap', '⋃': '\\cup'}
+        latex_symbol = symbol_map.get(symbol, symbol)
+        sub = omml_text(omml_child(element, 'sub'))
+        sup = omml_text(omml_child(element, 'sup'))
+        body = omml_text(omml_child(element, 'e'))
+        limits = ''
+        if sub:
+            limits += f"_{{{sub}}}"
+        if sup:
+            limits += f"^{{{sup}}}"
+        return f"{latex_symbol}{limits} {body}".strip()
+
+    if tag_name == 'limLow':
+        return f"\\lim_{{{omml_text(omml_child(element, 'lim'))}}} {omml_text(omml_child(element, 'e'))}"
+
+    if tag_name == 'limUpp':
+        return f"{omml_text(omml_child(element, 'e'))}^{{{omml_text(omml_child(element, 'lim'))}}}"
+
+    if tag_name == 'bar':
+        return f"\\overline{{{omml_text(omml_child(element, 'e'))}}}"
+
+    if tag_name == 'acc':
+        acc_pr = omml_child(element, 'accPr')
+        char = omml_attr(omml_child(acc_pr, 'chr'), 'val', '^')
+        expr = omml_text(omml_child(element, 'e'))
+        if char == '¯':
+            return f"\\overline{{{expr}}}"
+        if char == '→':
+            return f"\\vec{{{expr}}}"
+        return f"\\hat{{{expr}}}"
+
+    return ''.join(omml_text(child) for child in list(element))
+
+
+def extract_omml_equations_from_docx(docx_path):
+    """Trích công thức Word OMML thành LaTeX tuyến tính."""
+    equations = []
+    try:
+        import xml.etree.ElementTree as ET
+
+        with ZipFile(docx_path) as docx_zip:
+            xml_parts = [
+                name for name in docx_zip.namelist()
+                if name.startswith('word/') and name.endswith('.xml')
+            ]
+            for part_name in xml_parts:
+                root = ET.fromstring(docx_zip.read(part_name))
+                for element in root.iter():
+                    if xml_local_name(element.tag) in {'oMath', 'oMathPara'}:
+                        equation = re.sub(r'\s+', ' ', omml_text(element)).strip()
+                        if equation and equation not in equations:
+                            equations.append(equation)
+    except (BadZipFile, KeyError, ET.ParseError):
+        return []
+    except Exception:
+        return []
+
+    return equations
+
+
+def inspect_docx_embedded_assets(docx_path):
+    summary = {
+        'media_count': 0,
+        'ole_count': 0,
+        'mathtype_count': 0,
+        'media_extensions': {}
+    }
+
+    try:
+        with ZipFile(docx_path) as docx_zip:
+            for name in docx_zip.namelist():
+                if name.startswith('word/media/'):
+                    summary['media_count'] += 1
+                    ext = os.path.splitext(name)[1].lower().lstrip('.') or 'unknown'
+                    summary['media_extensions'][ext] = summary['media_extensions'].get(ext, 0) + 1
+                elif name.startswith('word/embeddings/oleObject'):
+                    summary['ole_count'] += 1
+                    data = docx_zip.read(name)
+                    if b'MathType' in data or b'Equation Native' in data:
+                        summary['mathtype_count'] += 1
+    except Exception:
+        pass
+
+    return summary
+
+
+def extract_docx_images_for_ai(docx_path, max_images=6):
+    """Lấy một số ảnh PNG/JPG/WebP trong DOCX để gửi kèm Gemini vision."""
+    images = []
+    try:
+        with ZipFile(docx_path) as docx_zip:
+            image_names = [
+                name for name in docx_zip.namelist()
+                if name.startswith('word/media/')
+                and os.path.splitext(name)[1].lower() in {'.png', '.jpg', '.jpeg', '.webp'}
+            ]
+
+            for name in image_names:
+                if len(images) >= max_images:
+                    break
+                try:
+                    img = Image.open(BytesIO(docx_zip.read(name)))
+                    img.load()
+                    if img.width < 80 or img.height < 40:
+                        continue
+                    images.append(img.convert('RGB'))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+
+    return images
+
+
+def find_libreoffice_executable():
+    configured_path = os.environ.get('LIBREOFFICE_PATH', '').strip()
+    if configured_path and os.path.exists(configured_path):
+        return configured_path
+
+    for command_name in ('soffice', 'libreoffice'):
+        command_path = shutil.which(command_name)
+        if command_path:
+            return command_path
+
+    windows_candidates = [
+        r'C:\Program Files\LibreOffice\program\soffice.exe',
+        r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
+    ]
+    for candidate in windows_candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return None
+
+
+def render_pdf_pages_for_ai(pdf_path, max_pages=4, zoom=1.25):
+    images = []
+    try:
+        document = fitz.open(pdf_path)
+        matrix = fitz.Matrix(zoom, zoom)
+        for page_index in range(min(max_pages, document.page_count)):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            img = Image.open(BytesIO(pixmap.tobytes('png')))
+            img.load()
+            images.append(img.convert('RGB'))
+        document.close()
+    except Exception:
+        return []
+
+    return images
+
+
+def render_docx_pages_for_ai(docx_path, max_pages=None):
+    """Render vài trang DOCX thành ảnh nếu server có LibreOffice."""
+    libreoffice_path = find_libreoffice_executable()
+    if not libreoffice_path:
+        return []
+
+    if max_pages is None:
+        try:
+            max_pages = int(os.environ.get('DOCX_RENDER_MAX_PAGES', '4'))
+        except ValueError:
+            max_pages = 4
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = subprocess.run(
+                [
+                    libreoffice_path,
+                    '--headless',
+                    '--convert-to',
+                    'pdf',
+                    '--outdir',
+                    temp_dir,
+                    docx_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode != 0:
+                return []
+
+            pdf_files = [
+                os.path.join(temp_dir, name)
+                for name in os.listdir(temp_dir)
+                if name.lower().endswith('.pdf')
+            ]
+            if not pdf_files:
+                return []
+
+            return render_pdf_pages_for_ai(pdf_files[0], max_pages=max_pages)
+    except Exception:
+        return []
+
+
 def extract_text_from_docx(docx_path):
-    """Trích xuất text từ file DOCX bằng mammoth."""
+    """Trích xuất text từ file DOCX, kèm công thức OMML và ghi chú MathType/OLE."""
     try:
         with open(docx_path, 'rb') as docx_file:
             result = mammoth.extract_raw_text(docx_file)
-        return (result.value or '').strip()
+        text = (result.value or '').strip()
+        docx_notes = []
+
+        omml_equations = extract_omml_equations_from_docx(docx_path)
+        if omml_equations:
+            equation_lines = '\n'.join(
+                f"{index}. \\({equation}\\)"
+                for index, equation in enumerate(omml_equations[:200], 1)
+            )
+            docx_notes.append(f"CÔNG THỨC TRÍCH XUẤT TỪ DOCX:\n{equation_lines}")
+
+        asset_summary = inspect_docx_embedded_assets(docx_path)
+        if asset_summary.get('ole_count') or asset_summary.get('media_count'):
+            ext_summary = ', '.join(
+                f"{ext}: {count}"
+                for ext, count in sorted(asset_summary.get('media_extensions', {}).items())
+            )
+            docx_notes.append(f"""GHI CHÚ HỆ THỐNG VỀ FILE DOCX:
+- File có {asset_summary.get('media_count', 0)} ảnh/đối tượng media ({ext_summary or 'không rõ định dạng'}).
+- File có {asset_summary.get('ole_count', 0)} OLE object, trong đó phát hiện {asset_summary.get('mathtype_count', 0)} đối tượng MathType/Equation cũ.
+- Một số công thức kiểu MathType/OLE/WMF có thể không trích được thành chữ. Nếu câu hỏi/phương án bị thiếu biểu thức, hãy nói rõ phần công thức trong file bị nhúng dạng ảnh/cũ và chỉ phân tích dựa trên phần đọc được, không tự bịa công thức.
+""".strip())
+
+        if docx_notes:
+            text = '\n\n'.join(docx_notes + [text]).strip()
+
+        return text
     except Exception as e:
         return f"Lỗi khi đọc DOCX: {str(e)}"
 
@@ -3017,6 +3321,7 @@ NHIỆM VỤ:
   7. Gợi ý nhánh sơ đồ tư duy
 - Công thức Toán phải viết LaTeX rõ ràng để MathJax hiển thị, ví dụ \\(a^2 + b^2 = c^2\\). Không viết sai ký hiệu toán học.
 - Với đề kiểm tra, chỉ giải thích hướng làm và kiến thức nền; không biến toàn bộ phản hồi thành đáp án hoàn chỉnh nếu học sinh chưa làm.
+- Nếu nội dung file có ghi chú hệ thống về MathType/OLE/WMF hoặc công thức bị nhúng dạng ảnh, hãy nói rõ hạn chế đọc công thức, dùng ảnh gửi kèm nếu có, và không tự bịa phần biểu thức bị thiếu.
 
 Câu hỏi của học sinh: {question}
 
@@ -4784,7 +5089,23 @@ Hãy ưu tiên sử dụng thông tin từ KIẾN THỨC CƠ SỞ khi trả lờ
                     full_prompt = build_chatbot_file_analysis_prompt(
                         system_prompt, file_text, user_message,
                         original_filename)
-                    response = model.generate_content([full_prompt])
+                    prompt_parts = [full_prompt]
+                    if file_ext == 'docx':
+                        docx_images = render_docx_pages_for_ai(temp_path)
+                        image_source_note = (
+                            "Hệ thống đã render một số trang đầu của DOCX thành ảnh. "
+                            "Hãy dùng ảnh để đọc công thức MathType/WMF, hình vẽ và bảng biểu nếu nhìn rõ."
+                        )
+                        if not docx_images:
+                            docx_images = extract_docx_images_for_ai(temp_path)
+                            image_source_note = (
+                                "Hệ thống đã gửi kèm một số ảnh PNG/JPG trích từ DOCX. "
+                                "Hãy dùng chúng để đọc hình vẽ, bảng biểu hoặc công thức dạng ảnh nếu nhìn rõ."
+                            )
+                        if docx_images:
+                            full_prompt += f"\n\n{image_source_note}"
+                            prompt_parts = docx_images + [full_prompt]
+                    response = model.generate_content(prompt_parts)
                     response_text = response.text
 
                 elif file_ext in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
