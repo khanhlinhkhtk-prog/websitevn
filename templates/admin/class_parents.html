@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phụ huynh - {{ class_obj.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background: #f5f7fb; font-family: "Segoe UI", Arial, sans-serif; color: #172033; }
+        .topbar { background: #fff; border-bottom: 1px solid #dbe3ef; padding: 14px 22px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+        .page-wrap { max-width: 1240px; margin: 28px auto; padding: 0 16px; }
+        .panel { background: #fff; border: 1px solid #dbe3ef; border-radius: 8px; box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08); }
+        .panel-header { padding: 16px 18px; border-bottom: 1px solid #e5edf7; font-weight: 800; color: #123a7a; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .panel-body { padding: 18px; }
+        .class-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .class-meta span { border-radius: 999px; background: #e0f2fe; color: #075985; font-weight: 800; font-size: 12px; padding: 6px 10px; }
+        .inline-form { display: flex; gap: 8px; align-items: center; }
+        .inline-form input { width: 170px; }
+        .table td { vertical-align: middle; }
+        code { color: #0f766e; font-weight: 800; }
+        @media (max-width: 768px) {
+            .topbar { align-items: flex-start; flex-direction: column; }
+            .inline-form { align-items: stretch; flex-direction: column; }
+            .inline-form input { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <strong><i class="fas fa-users"></i> Phụ huynh theo lớp</strong>
+            <span class="text-muted ms-2">{{ class_obj.name }}</span>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_dashboard') }}">
+                <i class="fas fa-arrow-left"></i> Quay lại dashboard
+            </a>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_logout') }}">
+                <i class="fas fa-sign-out-alt"></i> Đăng xuất
+            </a>
+        </div>
+    </header>
+
+    <main class="page-wrap">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <section class="panel mb-4">
+            <div class="panel-body">
+                <h1 class="h3 mb-1">{{ class_obj.name }}</h1>
+                <div class="class-meta">
+                    <span>Mã lớp: {{ class_obj.class_code }}</span>
+                    <span>Mật khẩu lớp: {{ class_obj.join_password_plain or 'Cần đặt lại' }}</span>
+                    <span>{{ class_obj.subject }}</span>
+                    <span>{{ parent_rows|length }} phụ huynh</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">Danh sách phụ huynh của lớp</div>
+            <div class="panel-body">
+                {% if parent_rows %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>STT</th>
+                                    <th>Học sinh</th>
+                                    <th>Tài khoản học sinh</th>
+                                    <th>Phụ huynh</th>
+                                    <th>Tài khoản phụ huynh</th>
+                                    <th>Liên hệ</th>
+                                    <th>Trạng thái</th>
+                                    <th>Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in parent_rows %}
+                                    {% set parent = row.parent %}
+                                    {% set student = row.student %}
+                                    <tr>
+                                        <td>{{ loop.index }}</td>
+                                        <td><strong>{{ student.full_name or '-' }}</strong></td>
+                                        <td><code>{{ student.username or '-' }}</code></td>
+                                        <td>{{ parent.full_name or '-' }}</td>
+                                        <td><code>{{ parent.username }}</code></td>
+                                        <td>
+                                            {{ parent.phone or '-' }}
+                                            {% if parent.email %}<br><span class="text-muted">{{ parent.email }}</span>{% endif %}
+                                        </td>
+                                        <td>
+                                            {% if parent.active is sameas false %}
+                                                <span class="badge bg-danger">Đã khóa</span>
+                                            {% else %}
+                                                <span class="badge bg-success">Hoạt động</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <form method="POST" action="{{ url_for('admin_toggle_parent', parent_id=parent.id) }}" class="mb-2">
+                                                <input type="hidden" name="next" value="{{ url_for('admin_class_parents', class_id=class_obj.id) }}">
+                                                <button class="btn btn-sm btn-warning" type="submit">
+                                                    {% if parent.active is sameas false %}Mở khóa{% else %}Khóa{% endif %}
+                                                </button>
+                                            </form>
+                                            <form method="POST" action="{{ url_for('admin_reset_parent_password', parent_id=parent.id) }}" class="inline-form">
+                                                <input type="hidden" name="next" value="{{ url_for('admin_class_parents', class_id=class_obj.id) }}">
+                                                <input class="form-control form-control-sm" name="new_password" type="password" placeholder="Mật khẩu mới" required>
+                                                <button class="btn btn-sm btn-secondary" type="submit">Reset</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="alert alert-info mb-0">Lớp này chưa có tài khoản phụ huynh.</div>
+                {% endif %}
+            </div>
+        </section>
+    </main>
+</body>
+</html>

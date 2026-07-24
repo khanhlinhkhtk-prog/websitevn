@@ -1120,12 +1120,18 @@ def build_admin_report_data():
         })
 
     parent_rows = []
+    parent_counts_by_class = {}
     for parent in parents:
+        class_id = parent.get('class_id')
+        parent_counts_by_class[class_id] = parent_counts_by_class.get(class_id, 0) + 1
         parent_rows.append({
             'parent': parent,
             'class': class_lookup.get(parent.get('class_id'), {}),
             'student': student_lookup.get(parent.get('student_id'), {})
         })
+
+    for row in class_rows:
+        row['parent_count'] = parent_counts_by_class.get(row['class'].get('id'), 0)
 
     student_options = []
     for class_obj in classes:
@@ -1422,6 +1428,45 @@ def admin_dashboard():
     return render_template('admin/dashboard.html', **report_data)
 
 
+@app.route('/admin/classes/<class_id>/parents')
+def admin_class_parents(class_id):
+    blocked = require_admin()
+    if blocked:
+        return blocked
+
+    users = load_exam_users()
+    classes = load_exam_classes()
+    class_obj = next((c for c in classes if c.get('id') == class_id), None)
+    if not class_obj:
+        flash('Không tìm thấy lớp học.', 'error')
+        return redirect(url_for('admin_dashboard'))
+
+    student_lookup = {
+        student.get('id'): student
+        for student in users.get('students', [])
+    }
+    parent_rows = []
+    for parent in users.get('parents', []):
+        if parent.get('class_id') != class_id:
+            continue
+        parent_rows.append({
+            'parent': parent,
+            'student': student_lookup.get(parent.get('student_id'), {})
+        })
+
+    parent_rows.sort(
+        key=lambda row: (
+            (row['student'].get('full_name') or '').lower(),
+            (row['parent'].get('full_name') or '').lower()
+        )
+    )
+    return render_template(
+        'admin/class_parents.html',
+        class_obj=class_obj,
+        parent_rows=parent_rows
+    )
+
+
 @app.route('/admin/export_report')
 def admin_export_report():
     blocked = require_admin()
@@ -1665,18 +1710,21 @@ def admin_toggle_parent(parent_id):
     blocked = require_admin()
     if blocked:
         return blocked
+    next_url = request.form.get('next') or url_for('admin_dashboard')
+    if not next_url.startswith('/admin/'):
+        next_url = url_for('admin_dashboard')
 
     users = load_exam_users()
     parent = next((p for p in users.get('parents', []) if p.get('id') == parent_id), None)
     if not parent:
         flash('Không tìm thấy tài khoản phụ huynh.', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(next_url)
 
     parent['active'] = not parent.get('active', True)
     parent['updated_at'] = datetime.now().strftime("%d/%m/%Y %H:%M")
     save_exam_users(users)
     flash('Đã cập nhật trạng thái phụ huynh.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(next_url)
 
 
 @app.route('/admin/parents/<parent_id>/reset_password', methods=['POST'])
@@ -1684,23 +1732,26 @@ def admin_reset_parent_password(parent_id):
     blocked = require_admin()
     if blocked:
         return blocked
+    next_url = request.form.get('next') or url_for('admin_dashboard')
+    if not next_url.startswith('/admin/'):
+        next_url = url_for('admin_dashboard')
 
     new_password = request.form.get('new_password', '').strip()
     if not new_password:
         flash('Vui lòng nhập mật khẩu mới cho phụ huynh.', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(next_url)
 
     users = load_exam_users()
     parent = next((p for p in users.get('parents', []) if p.get('id') == parent_id), None)
     if not parent:
         flash('Không tìm thấy tài khoản phụ huynh.', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return redirect(next_url)
 
     parent['password'] = generate_password_hash(new_password)
     parent['updated_at'] = datetime.now().strftime("%d/%m/%Y %H:%M")
     save_exam_users(users)
     flash('Đã reset mật khẩu phụ huynh.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    return redirect(next_url)
 
 
 # ---------------- TEACHER ROUTES ----------------

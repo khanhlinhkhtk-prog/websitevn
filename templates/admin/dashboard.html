@@ -198,50 +198,13 @@
             </div>
         </section>
 
-        <section class="panel mb-4">
-            <div class="panel-header">Bảng tài khoản phụ huynh</div>
-            <div class="panel-body">
-                {% if parent_rows %}
-                    <div class="table-responsive">
-                        <table class="table table-hover align-middle">
-                            <thead><tr><th>Phụ huynh</th><th>Tài khoản</th><th>Liên hệ</th><th>Học sinh</th><th>Lớp</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
-                            <tbody>
-                                {% for row in parent_rows %}
-                                    {% set parent = row.parent %}
-                                    <tr>
-                                        <td><strong>{{ parent.full_name }}</strong></td>
-                                        <td><code>{{ parent.username }}</code></td>
-                                        <td>{{ parent.phone or '-' }}<br><span class="text-muted">{{ parent.email or '' }}</span></td>
-                                        <td>{{ row.student.full_name or '-' }}<br><span class="text-muted">{{ row.student.username or '' }}</span></td>
-                                        <td>{{ row.class.name or '-' }}<br><code>{{ row.class.class_code or '' }}</code></td>
-                                        <td>{% if parent.active is sameas false %}<span class="badge bg-danger">Đã khóa</span>{% else %}<span class="badge bg-success">Hoạt động</span>{% endif %}</td>
-                                        <td>
-                                            <form method="POST" action="{{ url_for('admin_toggle_parent', parent_id=parent.id) }}" class="mb-2">
-                                                <button class="btn btn-sm btn-warning" type="submit">{% if parent.active is sameas false %}Mở khóa{% else %}Khóa{% endif %}</button>
-                                            </form>
-                                            <form method="POST" action="{{ url_for('admin_reset_parent_password', parent_id=parent.id) }}" class="inline-form">
-                                                <input class="form-control form-control-sm" name="new_password" type="password" placeholder="Mật khẩu mới" required>
-                                                <button class="btn btn-sm btn-secondary" type="submit">Reset</button>
-                                            </form>
-                                        </td>
-                                    </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                {% else %}
-                    <div class="alert alert-info mb-0">Chưa có tài khoản phụ huynh nào.</div>
-                {% endif %}
-            </div>
-        </section>
-
         <section class="panel">
             <div class="panel-header">Bảng thống kê lớp học</div>
             <div class="panel-body">
                 {% if class_rows %}
                     <div class="table-responsive">
                         <table class="table table-hover align-middle">
-                            <thead><tr><th>Lớp học</th><th>Mã lớp</th><th>Mật khẩu lớp</th><th>Khối/Lớp</th><th>Môn</th><th>Giáo viên</th><th>Học sinh</th><th>Bài giảng</th><th>Đề</th><th>Học liệu</th><th>Bài nộp</th><th>Điểm TB</th></tr></thead>
+                            <thead><tr><th>Lớp học</th><th>Mã lớp</th><th>Mật khẩu lớp</th><th>Khối/Lớp</th><th>Môn</th><th>Giáo viên</th><th>Học sinh</th><th>Phụ huynh</th><th>Bài giảng</th><th>Đề</th><th>Học liệu</th><th>Bài nộp</th><th>Điểm TB</th><th>Quản lý</th></tr></thead>
                             <tbody>
                                 {% for row in class_rows %}
                                     {% set class_obj = row.class %}
@@ -254,11 +217,17 @@
                                         <td>{{ class_obj.subject }}</td>
                                         <td>{{ row.teacher.full_name or class_obj.teacher_name or '-' }}</td>
                                         <td>{{ stats.student_count }}</td>
+                                        <td>{{ row.parent_count }}</td>
                                         <td>{{ stats.lesson_count }}</td>
                                         <td>{{ stats.exam_count }}</td>
                                         <td>{{ stats.material_count }}</td>
                                         <td>{{ stats.submission_count }}</td>
                                         <td>{% if stats.avg_score is none %}-{% else %}{{ "%.2f"|format(stats.avg_score) }}{% endif %}</td>
+                                        <td>
+                                            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('admin_class_parents', class_id=class_obj.id) }}">
+                                                Phụ huynh
+                                            </a>
+                                        </td>
                                     </tr>
                                 {% endfor %}
                             </tbody>
