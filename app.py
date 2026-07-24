@@ -4140,9 +4140,131 @@ def fold_search_text(text):
     return text.replace('đ', 'd')
 
 
+def is_math_exam_review_source(source_text, title=''):
+    folded = fold_search_text(f'{title} {source_text}')
+    math_signals = [
+        'toan 9', 'lop 9', 'hoc ki 1', 'hki 1', 'cki', 'de kiem tra',
+        'can bac', 'he phuong trinh', 'bat phuong trinh', 'he thuc luong',
+        'duong tron'
+    ]
+    return sum(1 for keyword in math_signals if keyword in folded) >= 3
+
+
+def is_generic_exam_skill_branch(branch):
+    text_parts = [
+        branch.get('title', ''),
+        branch.get('note', ''),
+        *[
+            child.get('title', '') if isinstance(child, dict) else str(child)
+            for child in branch.get('children', [])
+        ]
+    ]
+    folded = fold_search_text(' '.join(text_parts))
+    generic_keywords = [
+        'quan li thoi gian', 'quan ly thoi gian', 'phan bo thoi gian',
+        'lich hoc ca nhan', 'lam bai thi thu', 'nghi ngoi', 'ngu du',
+        'suc khoe tinh than', 'che do dinh duong', 'giu tam ly',
+        'chuan bi vat dung', 'do dung ca nhan', 'giay to can thiet',
+        'trinh bay sach dep', 'doc ky de', 'ki nang lam bai'
+    ]
+    return any(keyword in folded for keyword in generic_keywords)
+
+
+def build_math9_exam_mindmap_branches():
+    return [
+        {
+            'title': 'Căn bậc hai và căn bậc ba',
+            'note': 'Điều kiện xác định, biến đổi căn, rút gọn biểu thức',
+            'formula': '\\(A\\ge0,\\ \\sqrt{A^2}=|A|\\)',
+            'children': [
+                {'title': 'Đặt điều kiện trước khi rút gọn', 'formula': '\\(A\\ge0\\)'},
+                {'title': 'Khai căn tích và thương', 'formula': '\\(\\sqrt{ab}=\\sqrt a\\sqrt b\\)'},
+                {'title': 'Đưa thừa số ra ngoài căn', 'formula': '\\(\\sqrt{k^2A}=|k|\\sqrt A\\)'},
+                {'title': 'Trục căn thức ở mẫu', 'formula': '\\(\\frac1{\\sqrt a}=\\frac{\\sqrt a}{a}\\)'},
+                {'title': 'Căn bậc ba không cần điều kiện không âm', 'formula': '\\(\\sqrt[3]{a^3}=a\\)'}
+            ]
+        },
+        {
+            'title': 'Hệ phương trình bậc nhất hai ẩn',
+            'note': 'Nhận biết nghiệm, giải hệ và lập hệ từ bài toán thực tế',
+            'formula': "\\(\\begin{cases}ax+by=c\\\\a'x+b'y=c'\\end{cases}\\)",
+            'children': [
+                {'title': 'Thử cặp số vào từng phương trình', 'formula': '\\((x_0,y_0)\\)'},
+                {'title': 'Phương pháp thế', 'formula': '\\(x=...\\Rightarrow y=...\\)'},
+                {'title': 'Phương pháp cộng đại số', 'formula': '\\(a_1x+b_1y=c_1\\)'},
+                {'title': 'Bài toán mua sách giảm giá', 'formula': '\\(x+y=S\\)'},
+                {'title': 'Kiểm tra điều kiện giá tiền dương', 'formula': '\\(x>0,\\ y>0\\)'}
+            ]
+        },
+        {
+            'title': 'Phương trình và bất phương trình',
+            'note': 'Phương trình chứa mẫu, phương trình tích, bất phương trình bậc nhất',
+            'formula': '\\(ax+b=0,\\ ax+b>0\\)',
+            'children': [
+                {'title': 'Tìm điều kiện xác định của mẫu', 'formula': '\\(M(x)\\ne0\\)'},
+                {'title': 'Quy đồng rồi khử mẫu đúng điều kiện', 'formula': '\\(\\frac A B=\\frac C D\\)'},
+                {'title': 'Đổi chiều khi nhân chia số âm', 'formula': '\\(a<b,\\ c<0\\Rightarrow ac>bc\\)'},
+                {'title': 'Chọn giá trị nguyên nhỏ nhất/lớn nhất', 'formula': '\\(x\\in\\mathbb Z\\)'},
+                {'title': 'Thử nghiệm lại sau khi giải', 'formula': '\\(x\\in D\\)'}
+            ]
+        },
+        {
+            'title': 'Hệ thức lượng trong tam giác vuông',
+            'note': 'Tỉ số lượng giác, cạnh và góc trong tam giác vuông',
+            'formula': '\\(\\sin\\alpha=\\frac{a}{c},\\ \\tan\\alpha=\\frac{a}{b}\\)',
+            'children': [
+                {'title': 'Xác định đúng cạnh đối, cạnh kề, cạnh huyền', 'formula': ''},
+                {'title': 'Tính cạnh từ góc nhọn', 'formula': '\\(a=c\\sin A\\)'},
+                {'title': 'Tính góc từ tỉ số lượng giác', 'formula': '\\(\\alpha=\\arctan\\frac{a}{b}\\)'},
+                {'title': 'Bài toán cây gãy hoặc chiều cao', 'formula': '\\(a^2=b^2+c^2\\)'},
+                {'title': 'Làm tròn theo yêu cầu đề', 'formula': ''}
+            ]
+        },
+        {
+            'title': 'Đường tròn',
+            'note': 'Dây, đường kính, tiếp tuyến, hai đường tròn và hình quạt',
+            'formula': '\\(S=\\frac{n\\pi R^2}{360}\\)',
+            'children': [
+                {'title': 'Đường kính vuông góc dây thì đi qua trung điểm dây', 'formula': ''},
+                {'title': 'Tiếp tuyến vuông góc bán kính tại tiếp điểm', 'formula': '\\(OT\\perp d\\)'},
+                {'title': 'Hai tiếp tuyến cắt nhau có độ dài bằng nhau', 'formula': '\\(MA=MB\\)'},
+                {'title': 'Hai đường tròn cắt nhau', 'formula': '\\(|R-r|<OO\\prime<R+r\\)'},
+                {'title': 'Góc nội tiếp chắn nửa đường tròn', 'formula': '\\(90^\\circ\\)'}
+            ]
+        },
+        {
+            'title': 'Bài toán thực tế và cực trị',
+            'note': 'Lập mô hình, đặt ẩn, đưa về biểu thức cần tối ưu',
+            'formula': '\\(P(x)\\ge P_{min}\\)',
+            'children': [
+                {'title': 'Đọc đại lượng cần tìm và đơn vị', 'formula': ''},
+                {'title': 'Đặt ẩn có điều kiện phù hợp', 'formula': '\\(x>0\\)'},
+                {'title': 'Biểu diễn chu vi, diện tích hoặc chi phí theo ẩn', 'formula': ''},
+                {'title': 'Dùng Pythagore hoặc bất đẳng thức để đánh giá', 'formula': '\\(a^2+b^2\\ge2ab\\)'},
+                {'title': 'Kết luận theo ngữ cảnh thực tế', 'formula': ''}
+            ]
+        },
+        {
+            'title': 'Lỗi sai cần tránh',
+            'note': 'Các lỗi làm mất điểm nhiều trong đề học kì',
+            'formula': '',
+            'children': [
+                {'title': 'Quên điều kiện của căn và mẫu', 'formula': '\\(A\\ge0,\\ M(x)\\ne0\\)'},
+                {'title': 'Nhầm cạnh đối và cạnh kề trong lượng giác', 'formula': ''},
+                {'title': 'Áp dụng sai tính chất tiếp tuyến', 'formula': '\\(OT\\perp d\\)'},
+                {'title': 'Bỏ qua bước kiểm tra nghiệm', 'formula': ''},
+                {'title': 'Dùng nhầm công thức diện tích hình quạt', 'formula': '\\(S=\\frac{n}{360}\\pi R^2\\)'}
+            ]
+        }
+    ]
+
+
 def build_fallback_mindmap_branches(source_text, title):
     topic = safe_text(title or source_text, 'Nội dung học tập')
     folded = fold_search_text(f'{topic} {source_text}')
+
+    if is_math_exam_review_source(source_text, title):
+        return build_math9_exam_mindmap_branches()
 
     if any(keyword in folded for keyword in ['can bac 2', 'can thuc', 'sqrt']):
         return [
@@ -4294,14 +4416,16 @@ def normalize_mindmap_data(raw_data, source_text):
     branches = raw_data.get('branches') if isinstance(raw_data.get('branches'), list) else []
 
     normalized = []
-    for index, branch in enumerate(branches[:7]):
+    for index, branch in enumerate(branches[:8]):
         if not isinstance(branch, dict):
+            continue
+        if is_math_exam_review_source(source_text, title) and is_generic_exam_skill_branch(branch):
             continue
         branch_title, title_formula = extract_formula_from_text(branch.get('title'))
         branch_note, note_formula = extract_formula_from_text(branch.get('note'))
         children = branch.get('children') if isinstance(branch.get('children'), list) else []
         normalized_children = []
-        for child in children[:3]:
+        for child in children[:5]:
             normalized_child = normalize_mindmap_child(child)
             if normalized_child['title']:
                 normalized_children.append(normalized_child)
@@ -4324,6 +4448,24 @@ def normalize_mindmap_data(raw_data, source_text):
     if is_sqrt_topic(source_text, title) and not has_vietnamese_diacritics(ai_visible_text):
         normalized = build_fallback_mindmap_branches(source_text, title)
         summary = f'Tổng quan về {title}: định nghĩa, tính chất, điều kiện và ứng dụng.'
+
+    if is_math_exam_review_source(source_text, title):
+        visible_folded = fold_search_text(ai_visible_text)
+        content_keywords = [
+            'can bac', 'he phuong trinh', 'bat phuong trinh',
+            'he thuc luong', 'duong tron', 'tiep tuyen'
+        ]
+        generic_count = sum(
+            1 for branch in normalized
+            if is_generic_exam_skill_branch(branch)
+        )
+        content_count = sum(
+            1 for keyword in content_keywords
+            if keyword in visible_folded
+        )
+        if len(normalized) < 5 or generic_count >= 2 or content_count < 3:
+            normalized = build_math9_exam_mindmap_branches()
+            summary = 'Hệ thống kiến thức trọng tâm trong đề học kì 1 Toán 9.'
 
     if len(normalized) < 3:
         sentences = [
@@ -4914,15 +5056,17 @@ Chỉ trả về JSON hợp lệ, không markdown.
 Yêu cầu sư phạm:
 - Luôn viết tiếng Việt có dấu đầy đủ trong mọi trường chữ: title, summary, note, children.title.
 - Tóm tắt đúng kiến thức đã trao đổi, không thêm đáp án giải hoàn chỉnh nếu là bài tập.
-- Mỗi nhánh ngắn gọn, rõ ý, dùng tiếng Việt tự nhiên.
-- Tạo 4 đến 6 nhánh chính, mỗi nhánh có 2 đến 3 ý con để sơ đồ thoáng, không rối.
+- Sơ đồ phải BÁM SÁT nội dung học thuật trong phần NỘI DUNG, ưu tiên các mục "Các mạch kiến thức", "Công thức cần nhớ", "Phương pháp giải", "Lỗi sai", "Gợi ý nhánh sơ đồ tư duy" nếu có.
+- Nếu NỘI DUNG là đề kiểm tra Toán hoặc bản phân tích đề Toán: chỉ tạo nhánh về chương kiến thức, dạng bài, công thức, phương pháp giải và lỗi sai. TUYỆT ĐỐI không tạo nhánh chung chung như quản lí thời gian, đọc kỹ đề, phân bổ thời gian, lịch học cá nhân, nghỉ ngơi, sức khỏe tinh thần, đồ dùng cá nhân.
+- Mỗi nhánh phải có nội dung cụ thể, rõ môn học, rõ dạng bài hoặc công thức; tránh các nhánh mơ hồ như "lý thuyết cơ bản", "dạng bài tập" nếu không kèm chi tiết.
+- Tạo 6 đến 8 nhánh chính, mỗi nhánh có 3 đến 5 ý con để sơ đồ đủ chi tiết.
 - Đặt title ngắn, summary một câu.
 - title và note chỉ viết chữ thường ngắn gọn, TUYỆT ĐỐI không chèn LaTeX vào title hoặc note.
 - Mọi công thức, ký hiệu Toán phải đặt riêng trong trường "formula".
 - Nếu nội dung có công thức Toán, BẮT BUỘC đưa công thức quan trọng vào trường "formula".
 - Công thức phải viết bằng LaTeX MathJax dạng INLINE \\(...\\), không dùng \\[...\\] trong sơ đồ vì ô nhỏ.
 - Vì đang trả về JSON, mỗi dấu backslash trong LaTeX nên viết thành \\\\, ví dụ "\\\\frac{{a}}{{b}}".
-- Với các mục như trung bình cộng, tổng, xác suất, đạo hàm, tích phân, hình học... hãy ưu tiên chèn công thức vào nhánh phù hợp.
+- Với các mục như căn thức, hệ phương trình, bất phương trình, hệ thức lượng, đường tròn, hình quạt... hãy ưu tiên chèn công thức vào nhánh phù hợp.
 - Có thể gợi ý visual_style/palette nhưng không bắt buộc.
 
 Schema:
@@ -4943,7 +5087,7 @@ Schema:
 }}
 
 NỘI DUNG:
-{source_text[:6000]}
+{source_text[:12000]}
 """
 
     try:
