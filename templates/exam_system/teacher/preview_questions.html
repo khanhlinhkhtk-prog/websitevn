@@ -21,15 +21,42 @@
             <div class="alert alert-success alert-dismissible fade show" role="alert">
                 <i class="fas fa-check-circle"></i> 
                 <strong>Parse thành công!</strong> Đã phân tích được <strong>{{ questions|length }}</strong> câu hỏi từ file Word.
-                <button type="button" class="close" data-dismiss="alert">
-                    <span>&times;</span>
-                </button>
+                {% if expected_question_count %}
+                    File Word phát hiện khoảng <strong>{{ expected_question_count }}</strong> câu.
+                {% endif %}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Đóng"></button>
             </div>
+
+            {% set parse_errors = parse_errors|default([]) %}
+            {% set parse_warnings = parse_warnings|default([]) %}
+            {% set can_save = can_save|default(true) %}
+            {% if parse_errors %}
+            <div class="alert alert-danger" role="alert">
+                <strong>Chưa thể lưu đề vì import còn lỗi:</strong>
+                <ul class="mb-0 mt-2">
+                    {% for item in parse_errors %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if parse_warnings %}
+            <div class="alert alert-warning" role="alert">
+                <strong>Cần kiểm tra lại trước khi lưu:</strong>
+                <ul class="mb-0 mt-2">
+                    {% for item in parse_warnings %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
 
             <!-- Form xác nhận -->
             <form method="POST" action="{{ url_for('teacher_create_multiple_choice', class_id=class_obj.id) if class_obj else url_for('teacher_create_multiple_choice') }}">
                 <input type="hidden" name="confirm" value="yes">
                 <input type="hidden" name="questions_json" id="questions_json" value='{{ questions | tojson }}'>
+                <input type="hidden" name="parse_errors_json" id="parse_errors_json" value='{{ parse_errors | tojson }}'>
 
                 <!-- Thông tin đề thi -->
                 <div class="card shadow mb-4">
@@ -79,15 +106,15 @@
                                     </label>
                                     <select class="form-control" id="subject" name="subject" required>
                                         <option value="">-- Chọn môn học --</option>
-                                        <option value="Toán">Toán</option>
-                                        <option value="Văn">Văn</option>
-                                        <option value="Tiếng Anh">Tiếng Anh</option>
-                                        <option value="Vật Lý">Vật Lý</option>
-                                        <option value="Hóa Học">Hóa Học</option>
-                                        <option value="Sinh Học">Sinh Học</option>
-                                        <option value="Lịch Sử">Lịch Sử</option>
-                                        <option value="Địa Lý">Địa Lý</option>
-                                        <option value="GDCD">GDCD</option>
+                                        <option value="Toán" {% if class_obj and class_obj.subject == 'Toán' %}selected{% endif %}>Toán</option>
+                                        <option value="Văn" {% if class_obj and class_obj.subject == 'Văn' %}selected{% endif %}>Văn</option>
+                                        <option value="Tiếng Anh" {% if class_obj and class_obj.subject == 'Tiếng Anh' %}selected{% endif %}>Tiếng Anh</option>
+                                        <option value="Vật Lý" {% if class_obj and class_obj.subject == 'Vật Lý' %}selected{% endif %}>Vật Lý</option>
+                                        <option value="Hóa Học" {% if class_obj and class_obj.subject == 'Hóa Học' %}selected{% endif %}>Hóa Học</option>
+                                        <option value="Sinh Học" {% if class_obj and class_obj.subject == 'Sinh Học' %}selected{% endif %}>Sinh Học</option>
+                                        <option value="Lịch Sử" {% if class_obj and class_obj.subject == 'Lịch Sử' %}selected{% endif %}>Lịch Sử</option>
+                                        <option value="Địa Lý" {% if class_obj and class_obj.subject == 'Địa Lý' %}selected{% endif %}>Địa Lý</option>
+                                        <option value="GDCD" {% if class_obj and class_obj.subject == 'GDCD' %}selected{% endif %}>GDCD</option>
                                     </select>
                                 </div>
                             </div>
@@ -100,13 +127,13 @@
                                     </label>
                                     <select class="form-control" id="grade" name="grade" required>
                                         <option value="">-- Chọn khối --</option>
-                                        <option value="6">Lớp 6</option>
-                                        <option value="7">Lớp 7</option>
-                                        <option value="8">Lớp 8</option>
-                                        <option value="9">Lớp 9</option>
-                                        <option value="10">Lớp 10</option>
-                                        <option value="11">Lớp 11</option>
-                                        <option value="12">Lớp 12</option>
+                                        <option value="6" {% if class_obj and class_obj.grade|string == '6' %}selected{% endif %}>Lớp 6</option>
+                                        <option value="7" {% if class_obj and class_obj.grade|string == '7' %}selected{% endif %}>Lớp 7</option>
+                                        <option value="8" {% if class_obj and class_obj.grade|string == '8' %}selected{% endif %}>Lớp 8</option>
+                                        <option value="9" {% if class_obj and class_obj.grade|string == '9' %}selected{% endif %}>Lớp 9</option>
+                                        <option value="10" {% if class_obj and class_obj.grade|string == '10' %}selected{% endif %}>Lớp 10</option>
+                                        <option value="11" {% if class_obj and class_obj.grade|string == '11' %}selected{% endif %}>Lớp 11</option>
+                                        <option value="12" {% if class_obj and class_obj.grade|string == '12' %}selected{% endif %}>Lớp 12</option>
                                     </select>
                                 </div>
                             </div>
@@ -140,7 +167,7 @@
                     </div>
                     <div class="card-body">
                         {% for q in questions %}
-                        <div class="question-preview mb-4 p-3 border rounded {% if loop.index % 2 == 0 %}bg-light{% endif %}">
+                        <div class="question-preview mb-4 p-3 border rounded {% if loop.index % 2 == 0 %}bg-light{% endif %}" id="question-card-{{ loop.index0 }}">
                             <div class="d-flex justify-content-between align-items-start mb-2">
                                 <h6 class="text-primary mb-0">
                                     <span class="badge badge-primary">{{ loop.index }}</span>
@@ -154,17 +181,17 @@
                                 </button>
                             </div>
 
-                            <p class="mb-3">{{ q.question }}</p>
+                            <p class="mb-3 math-content question-text-preview">{{ q.question }}</p>
 
                             <div class="options">
                                 {% for option in q.options %}
-                                <div class="option-item p-2 rounded mb-1 
-                                    {% if option.startswith(q.correct_answer) %}
+                                <div class="option-item p-2 rounded mb-1 math-content
+                                    {% if option[:1] == q.correct_answer %}
                                         bg-success text-white
                                     {% else %}
                                         bg-light
                                     {% endif %}">
-                                    {% if option.startswith(q.correct_answer) %}
+                                    {% if option[:1] == q.correct_answer %}
                                         <i class="fas fa-check-circle"></i>
                                     {% endif %}
                                     {{ option }}
@@ -176,7 +203,7 @@
                             <div class="mt-2 p-2 bg-info text-white rounded">
                                 <small>
                                     <i class="fas fa-lightbulb"></i> 
-                                    <strong>Giải thích:</strong> {{ q.explanation }}
+                                    <strong>Giải thích:</strong> <span class="explanation-preview">{{ q.explanation }}</span>
                                 </small>
                             </div>
                             {% endif %}
@@ -209,7 +236,7 @@
 
                 <!-- Buttons -->
                 <div class="text-center mb-4">
-                    <button type="submit" class="btn btn-success btn-lg">
+                    <button type="submit" class="btn btn-success btn-lg" {% if not can_save %}disabled title="Còn lỗi parse, chưa thể lưu đề"{% endif %}>
                         <i class="fas fa-check"></i> Xác Nhận & Lưu Đề Thi
                     </button>
                     <a href="{{ url_for('teacher_create_multiple_choice', class_id=class_obj.id) if class_obj else url_for('teacher_create_multiple_choice') }}" class="btn btn-secondary btn-lg">
@@ -232,9 +259,7 @@
                 <h5 class="modal-title">
                     <i class="fas fa-edit"></i> Chỉnh Sửa Câu Hỏi
                 </h5>
-                <button type="button" class="close" data-dismiss="modal">
-                    <span>&times;</span>
-                </button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -272,7 +297,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Hủy</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
                 <button type="button" class="btn btn-primary" onclick="saveEdit()">Lưu Thay Đổi</button>
             </div>
         </div>
@@ -282,6 +307,12 @@
 <script>
 let questions = {{ questions | tojson }};
 let currentEditIndex = -1;
+
+function renderMath(container = document) {
+    if (window.MathJax && window.MathJax.typesetPromise) {
+        window.MathJax.typesetPromise([container]);
+    }
+}
 
 function editQuestion(index) {
     currentEditIndex = index;
@@ -295,7 +326,7 @@ function editQuestion(index) {
     document.getElementById('edit_correct').value = q.correct_answer;
     document.getElementById('edit_explanation').value = q.explanation || '';
     
-    $('#editModal').modal('show');
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();
 }
 
 function saveEdit() {
@@ -311,15 +342,51 @@ function saveEdit() {
     
     // Update hidden field
     document.getElementById('questions_json').value = JSON.stringify(questions);
-    
-    // Reload page to show changes
-    location.reload();
+
+    const card = document.getElementById(`question-card-${currentEditIndex}`);
+    if (card) {
+        const q = questions[currentEditIndex];
+        card.querySelector('.question-text-preview').textContent = q.question;
+        const optionNodes = card.querySelectorAll('.option-item');
+        optionNodes.forEach((node, optionIndex) => {
+            const optionText = q.options[optionIndex] || '';
+            node.classList.remove('bg-success', 'text-white', 'bg-light');
+            node.classList.add(optionText.slice(0, 1) === q.correct_answer ? 'bg-success' : 'bg-light');
+            if (optionText.slice(0, 1) === q.correct_answer) {
+                node.classList.add('text-white');
+                node.innerHTML = '<i class="fas fa-check-circle"></i> ' + optionText;
+            } else {
+                node.textContent = optionText;
+            }
+        });
+        const explanationNode = card.querySelector('.explanation-preview');
+        if (explanationNode) {
+            explanationNode.textContent = q.explanation || '';
+        }
+        renderMath(card);
+    }
+
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).hide();
 }
 
 function editAll() {
     alert('Chức năng chỉnh sửa hàng loạt đang phát triển. Vui lòng chỉnh sửa từng câu.');
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    renderMath();
+});
 </script>
+<script>
+window.MathJax = {
+    tex: {
+        inlineMath: [['\\(', '\\)'], ['$', '$']],
+        displayMath: [['\\[', '\\]']]
+    },
+    svg: { fontCache: 'none' }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
 
 <style>
 .question-preview {

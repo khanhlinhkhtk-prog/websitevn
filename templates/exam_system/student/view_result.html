@@ -235,3 +235,16 @@
 }
 </style>
 {% endblock %}
+
+{% block extra_js %}
+<script>
+window.MathJax = {
+    tex: {
+        inlineMath: [['\\(', '\\)'], ['$', '$']],
+        displayMath: [['\\[', '\\]']]
+    },
+    svg: { fontCache: 'none' }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+{% endblock %}

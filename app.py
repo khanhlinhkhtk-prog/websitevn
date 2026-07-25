@@ -2231,6 +2231,179 @@ def teacher_create_exam(class_id=None):
                            class_obj=class_obj)
 
 
+def extract_question_numbers_from_text(text):
+    numbers = []
+    for match in re.finditer(r'(?:^|\n)\s*Câu\s*(\d+)\b', str(text or ''), flags=re.IGNORECASE):
+        try:
+            numbers.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return sorted(set(numbers))
+
+
+def normalize_answer_letter(value):
+    value = str(value or '').strip().upper()
+    match = re.search(r'\b([ABCD])\b', value)
+    return match.group(1) if match else ''
+
+
+def normalize_option_text(option, letter):
+    option = str(option or '').strip()
+    option = re.sub(r'^\s*[ABCD]\s*[\.\):\-]\s*', '', option, flags=re.IGNORECASE)
+    return f'{letter}. {option}'.strip()
+
+
+def normalize_imported_questions(raw_data):
+    if isinstance(raw_data, list):
+        raw_questions = raw_data
+    elif isinstance(raw_data, dict):
+        raw_questions = raw_data.get('questions') or raw_data.get('cau_hoi') or []
+    else:
+        raw_questions = []
+
+    normalized = []
+    warnings = []
+    for index, raw_question in enumerate(raw_questions, 1):
+        if not isinstance(raw_question, dict):
+            warnings.append(f'Bỏ qua mục thứ {index} vì không phải dữ liệu câu hỏi hợp lệ.')
+            continue
+
+        question_id = raw_question.get('id') or raw_question.get('number') or raw_question.get('question_number') or index
+        try:
+            question_id = int(question_id)
+        except (TypeError, ValueError):
+            question_id = index
+
+        question_text = str(
+            raw_question.get('question')
+            or raw_question.get('question_text')
+            or raw_question.get('content')
+            or raw_question.get('text')
+            or ''
+        ).strip()
+
+        raw_options = raw_question.get('options') or raw_question.get('answers') or []
+        if isinstance(raw_options, dict):
+            raw_options = [raw_options.get(letter, '') for letter in ['A', 'B', 'C', 'D']]
+        raw_options = list(raw_options)[:4] if isinstance(raw_options, list) else []
+        while len(raw_options) < 4:
+            raw_options.append('')
+
+        options = [
+            normalize_option_text(raw_options[0], 'A'),
+            normalize_option_text(raw_options[1], 'B'),
+            normalize_option_text(raw_options[2], 'C'),
+            normalize_option_text(raw_options[3], 'D')
+        ]
+        correct_answer = normalize_answer_letter(
+            raw_question.get('correct_answer')
+            or raw_question.get('answer')
+            or raw_question.get('dap_an')
+        )
+        explanation = str(raw_question.get('explanation') or raw_question.get('explain') or '').strip()
+
+        normalized.append({
+            'id': question_id,
+            'question': question_text,
+            'options': options,
+            'correct_answer': correct_answer,
+            'explanation': explanation
+        })
+
+    normalized.sort(key=lambda item: item['id'])
+    return normalized, warnings
+
+
+def validate_imported_questions(questions, source_text):
+    errors = []
+    warnings = []
+
+    if not questions:
+        errors.append('AI chưa parse được câu hỏi nào từ file Word.')
+        return errors, warnings
+
+    expected_numbers = extract_question_numbers_from_text(source_text)
+    parsed_numbers = sorted({q.get('id') for q in questions if isinstance(q.get('id'), int)})
+    if expected_numbers:
+        missing_numbers = [number for number in expected_numbers if number not in parsed_numbers]
+        extra_numbers = [number for number in parsed_numbers if number not in expected_numbers]
+        if missing_numbers:
+            errors.append(
+                'Thiếu câu so với file Word: '
+                + ', '.join(f'Câu {number}' for number in missing_numbers[:20])
+                + ('...' if len(missing_numbers) > 20 else '')
+            )
+        if extra_numbers:
+            warnings.append(
+                'AI tạo thêm số câu không thấy rõ trong file: '
+                + ', '.join(f'Câu {number}' for number in extra_numbers[:20])
+            )
+
+    seen_ids = set()
+    for index, question in enumerate(questions, 1):
+        question_id = question.get('id')
+        if question_id in seen_ids:
+            errors.append(f'Câu {question_id} bị trùng số thứ tự.')
+        seen_ids.add(question_id)
+
+        if not question.get('question'):
+            errors.append(f'Câu {question_id or index} thiếu nội dung câu hỏi.')
+
+        options = question.get('options') or []
+        if len(options) != 4 or any(not re.sub(r'^[ABCD]\.\s*', '', str(option)).strip() for option in options):
+            errors.append(f'Câu {question_id or index} chưa đủ 4 phương án A, B, C, D.')
+
+        if question.get('correct_answer') not in {'A', 'B', 'C', 'D'}:
+            errors.append(f'Câu {question_id or index} thiếu đáp án đúng A/B/C/D.')
+
+    return errors, warnings
+
+
+def build_word_exam_parse_prompt(word_content, expected_numbers, class_obj):
+    expected_line = (
+        f"Số câu hệ thống phát hiện trong file: {len(expected_numbers)} "
+        f"({', '.join('Câu ' + str(number) for number in expected_numbers[:60])})."
+        if expected_numbers else
+        "Hệ thống chưa đếm chắc được số câu; hãy parse toàn bộ câu hỏi nhìn thấy trong nội dung."
+    )
+
+    return f"""Bạn là bộ chuyển đổi đề trắc nghiệm Word sang JSON cho hệ thống thi trực tuyến.
+
+Ngữ cảnh lớp:
+- Môn: {class_obj.get('subject', '')}
+- Khối: {class_obj.get('grade', '')}
+
+{expected_line}
+
+YÊU CẦU BẮT BUỘC:
+- Chỉ lấy câu trắc nghiệm 4 lựa chọn A, B, C, D.
+- Không bỏ sót câu nào có dạng "Câu số".
+- Giữ nguyên nội dung Toán, ký hiệu và công thức đọc được; nếu viết lại công thức, dùng LaTeX inline dạng \\(...\\).
+- Nếu công thức trong Word bị mất do MathType/OLE/ảnh, để nguyên phần chữ đọc được và ghi chú ngắn trong explanation, không tự bịa công thức.
+- correct_answer chỉ được là một chữ A, B, C hoặc D.
+- options phải có đúng 4 phần tử, mỗi phần tử bắt đầu bằng "A. ", "B. ", "C. ", "D. ".
+- Nếu trong file có dòng "Đáp án: X", dùng đúng X.
+- Nếu không xác định được đáp án, vẫn tạo câu nhưng để correct_answer là "" để hệ thống cảnh báo.
+- Chỉ trả về JSON hợp lệ, không markdown, không ```json.
+
+Schema:
+{{
+  "questions": [
+    {{
+      "id": 1,
+      "question": "Nội dung câu hỏi",
+      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+      "correct_answer": "A",
+      "explanation": "Giải thích nếu có"
+    }}
+  ]
+}}
+
+NỘI DUNG WORD ĐÃ TRÍCH XUẤT:
+{word_content[:18000]}
+"""
+
+
 @app.route('/exam_system/teacher/create_multiple_choice',
            methods=['GET', 'POST'])
 @app.route('/exam_system/teacher/classes/<class_id>/create_multiple_choice',
@@ -2339,46 +2512,76 @@ def teacher_create_multiple_choice(class_id=None):
 
         if 'word_file' in request.files:
             word_file = request.files['word_file']
-            if word_file and word_file.filename.endswith('.docx'):
-                # Đọc nội dung Word
-                word_content = mammoth.extract_raw_text(word_file).value
+            if not word_file or not word_file.filename:
+                flash('Vui lòng chọn file Word .docx.', 'error')
+                return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
-                # Dùng AI parse thành JSON
-                prompt = f"""Đây là nội dung đề trắc nghiệm từ file Word:
+            if not word_file.filename.lower().endswith('.docx'):
+                flash('Chức năng này chỉ hỗ trợ file .docx.', 'error')
+                return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
-{word_content}
+            temp_path = None
+            try:
+                temp_filename = f"exam_import_{uuid.uuid4()}_{secure_filename(word_file.filename)}"
+                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], temp_filename)
+                word_file.save(temp_path)
 
-Hãy chuyển đổi thành JSON với format:
-{{
-  "questions": [
-    {{
-      "id": 1,
-      "question": "Câu hỏi",
-      "options": ["A. Đáp án 1", "B. Đáp án 2", "C. Đáp án 3", "D. Đáp án 4"],
-      "correct_answer": "A",
-      "explanation": "Giải thích"
-    }}
-  ]
-}}
+                word_content = extract_text_from_docx(temp_path)
+                if not word_content or word_content.startswith('Lỗi khi đọc DOCX'):
+                    flash(word_content or 'Không đọc được nội dung file Word.', 'error')
+                    return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
-CHỈ TRẢ VỀ JSON, KHÔNG THÊM TEXT KHÁC."""
+                expected_numbers = extract_question_numbers_from_text(word_content)
+                prompt = build_word_exam_parse_prompt(word_content, expected_numbers, class_obj)
+                prompt_parts = [prompt]
 
-                try:
-                    response = model.generate_content([prompt])
-                    ai_json = response.text.replace('```json',
-                                                    '').replace('```',
-                                                                '').strip()
-                    questions_data = json.loads(ai_json)
+                docx_images = render_docx_pages_for_ai(temp_path)
+                image_note = (
+                    "\n\nHệ thống đã gửi kèm ảnh render từ vài trang đầu DOCX. "
+                    "Hãy dùng ảnh để đọc công thức, bố cục đáp án và hình vẽ nếu nhìn rõ."
+                )
+                if not docx_images:
+                    docx_images = extract_docx_images_for_ai(temp_path)
+                    image_note = (
+                        "\n\nHệ thống đã gửi kèm một số ảnh PNG/JPG trích từ DOCX. "
+                        "Hãy dùng ảnh để đọc công thức hoặc hình vẽ nếu nhìn rõ."
+                    )
+                if docx_images:
+                    prompt_parts = docx_images + [prompt + image_note]
 
-                    # Lưu vào session để preview
-                    session['preview_questions'] = questions_data
+                response = model.generate_content(prompt_parts)
+                ai_text = get_gemini_text(
+                    response,
+                    'AI chưa trả về dữ liệu câu hỏi. Vui lòng thử lại hoặc đổi file Word sang PDF rõ nét hơn.'
+                )
+                raw_questions_data = parse_ai_json_response(ai_text)
+                questions, normalize_warnings = normalize_imported_questions(raw_questions_data)
+                parse_errors, parse_warnings = validate_imported_questions(questions, word_content)
+                parse_warnings = normalize_warnings + parse_warnings
 
-                    return render_template(
-                        'exam_system/teacher/preview_questions.html',
-                        questions=questions_data['questions'],
-                        class_obj=class_obj)
-                except Exception as e:
-                    flash(f'Lỗi khi parse file: {str(e)}', 'error')
+                if not questions:
+                    flash('AI chưa parse được câu hỏi nào từ file Word.', 'error')
+                    return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
+
+                questions_data = {'questions': questions}
+                session['preview_questions'] = questions_data
+
+                return render_template(
+                    'exam_system/teacher/preview_questions.html',
+                    questions=questions,
+                    class_obj=class_obj,
+                    parse_errors=parse_errors,
+                    parse_warnings=parse_warnings,
+                    expected_question_count=len(expected_numbers),
+                    can_save=not parse_errors)
+            except Exception as e:
+                flash(f'Lỗi khi parse file: {sanitize_gemini_error(e)}', 'error')
+            finally:
+                if temp_path:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
 
         # Nếu confirm từ preview
         if request.form.get('confirm') == 'yes':
@@ -2387,9 +2590,23 @@ CHỈ TRẢ VỀ JSON, KHÔNG THÊM TEXT KHÁC."""
             time_limit = request.form.get('time_limit', '0')
             subject = request.form.get('subject', '').strip() or class_obj.get('subject', '')
             grade = request.form.get('grade', '').strip() or class_obj.get('grade', '')
+            parse_errors = json.loads(request.form.get('parse_errors_json') or '[]')
+            if parse_errors:
+                flash('Đề import còn lỗi parse nên chưa thể lưu. Vui lòng quay lại kiểm tra file Word.', 'error')
+                return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
             questions_json = request.form.get('questions_json')
-            questions = json.loads(questions_json)
+            questions, _ = normalize_imported_questions(json.loads(questions_json))
+            validation_errors, _ = validate_imported_questions(questions, '')
+            if validation_errors:
+                flash('Đề chưa hợp lệ: ' + ' '.join(validation_errors[:3]), 'error')
+                return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
+
+            try:
+                time_limit = max(0, int(time_limit or 0))
+            except ValueError:
+                flash('Thời gian làm bài phải là số phút hợp lệ.', 'error')
+                return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
             new_exam = {
                 'id': str(uuid.uuid4()),
@@ -2399,7 +2616,7 @@ CHỈ TRẢ VỀ JSON, KHÔNG THÊM TEXT KHÁC."""
                 'teacher_id': session.get('exam_user_id'),
                 'class_id': class_id,
                 'created_at': datetime.now().strftime("%d/%m/%Y %H:%M"),
-                'time_limit': int(time_limit),
+                'time_limit': time_limit,
                 'subject': subject,
                 'grade': grade,
                 'status': 'active',
