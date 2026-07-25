@@ -2314,6 +2314,27 @@ def normalize_imported_questions(raw_data):
     return normalized, warnings
 
 
+def is_missing_formula_placeholder(value):
+    text = str(value or '').strip()
+    if not text:
+        return False
+
+    folded = unicodedata.normalize('NFKD', text.lower())
+    folded = ''.join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = folded.replace('đ', 'd')
+    markers = [
+        'cong thuc bi thieu',
+        'cong thuc thieu',
+        'missing formula',
+        'formula missing',
+        'khong doc duoc cong thuc',
+        'khong nhan dien duoc cong thuc',
+        '[cong thuc',
+        '[missing',
+    ]
+    return any(marker in folded for marker in markers)
+
+
 def validate_imported_questions(questions, source_text, source_label='file'):
     errors = []
     warnings = []
@@ -2348,10 +2369,18 @@ def validate_imported_questions(questions, source_text, source_label='file'):
 
         if not question.get('question'):
             errors.append(f'Câu {question_id or index} thiếu nội dung câu hỏi.')
+        elif is_missing_formula_placeholder(question.get('question')):
+            errors.append(f'Câu {question_id or index} còn placeholder công thức trong nội dung câu hỏi.')
 
         options = question.get('options') or []
         if len(options) != 4 or any(not re.sub(r'^[ABCD]\.\s*', '', str(option)).strip() for option in options):
             errors.append(f'Câu {question_id or index} chưa đủ 4 phương án A, B, C, D.')
+        else:
+            for option in options:
+                option_text = re.sub(r'^[ABCD]\.\s*', '', str(option)).strip()
+                if is_missing_formula_placeholder(option_text):
+                    errors.append(f'Câu {question_id or index} còn placeholder công thức trong phương án {str(option)[:1]}.')
+                    break
 
         if question.get('correct_answer') not in {'A', 'B', 'C', 'D'}:
             errors.append(f'Câu {question_id or index} thiếu đáp án đúng A/B/C/D.')
@@ -2392,6 +2421,7 @@ YÊU CẦU BẮT BUỘC:
 - Không bỏ sót câu nào có dạng "Câu số".
 - Giữ nguyên nội dung Toán, ký hiệu và công thức đọc được; nếu viết lại công thức, dùng LaTeX inline dạng \\(...\\).
 - Nếu công thức trong phần text bị mất do MathType/OLE/ảnh, hãy đọc trên ảnh trang gửi kèm nếu có; nếu vẫn không đọc được thì ghi chú ngắn trong explanation, không tự bịa công thức.
+- TUYỆT ĐỐI không được điền placeholder như "[CÔNG THỨC BỊ THIẾU]", "[MISSING_FORMULA]", "công thức bị thiếu" vào question hoặc options. Nếu không đọc được công thức quan trọng của câu/phương án thì vẫn để phần đó trống/ghi chú để hệ thống báo lỗi, không tự tạo đề rác.
 - correct_answer chỉ được là một chữ A, B, C hoặc D.
 - options phải có đúng 4 phần tử, mỗi phần tử bắt đầu bằng "A. ", "B. ", "C. ", "D. ".
 - Nếu trong file có dòng "Đáp án: X", dùng đúng X.
@@ -2526,13 +2556,13 @@ def teacher_create_multiple_choice(class_id=None):
         if 'word_file' in request.files:
             import_file = request.files['word_file']
             if not import_file or not import_file.filename:
-                flash('Vui lòng chọn file Word .docx hoặc PDF.', 'error')
+                flash('Vui lòng chọn file PDF.', 'error')
                 return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
             original_filename = import_file.filename
             file_ext = original_filename.rsplit('.', 1)[1].lower() if '.' in original_filename else ''
-            if file_ext not in {'docx', 'pdf'}:
-                flash('Chức năng này chỉ hỗ trợ file .docx hoặc .pdf.', 'error')
+            if file_ext != 'pdf':
+                flash('Chức năng import đề hiện chỉ nhận PDF. Vui lòng xuất Word/WPS sang PDF rồi upload lại.', 'error')
                 return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
             temp_path = None
@@ -2541,33 +2571,21 @@ def teacher_create_multiple_choice(class_id=None):
                 temp_path = os.path.join(app.config['UPLOAD_FOLDER'], temp_filename)
                 import_file.save(temp_path)
 
-                source_label = 'file PDF' if file_ext == 'pdf' else 'file Word'
+                source_label = 'file PDF'
                 import_warnings = []
                 max_pages = get_exam_import_max_pages()
 
-                if file_ext == 'pdf':
-                    file_content = extract_text_from_pdf(temp_path)
-                    if file_content.startswith('Lỗi khi đọc PDF'):
-                        flash(file_content, 'error')
-                        return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
-                    page_images = render_pdf_pages_for_ai(temp_path, max_pages=max_pages, zoom=1.6)
-                    if not page_images:
-                        import_warnings.append('Server chưa render được PDF thành ảnh; AI sẽ parse chủ yếu từ text trích xuất.')
-                else:
-                    file_content = extract_text_from_docx(temp_path)
-                    if not file_content or file_content.startswith('Lỗi khi đọc DOCX'):
-                        flash(file_content or 'Không đọc được nội dung file Word.', 'error')
-                        return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
-                    page_images = render_docx_pages_for_ai(temp_path, max_pages=max_pages)
-                    if not page_images:
-                        import_warnings.append(
-                            'Server chưa convert Word sang ảnh/PDF được. Nếu công thức MathType/OLE bị mất, hãy xuất file Word sang PDF rồi import lại.'
-                        )
-                        page_images = extract_docx_images_for_ai(temp_path, max_images=8)
-                    else:
-                        import_warnings.append(
-                            f'Server đã render tối đa {len(page_images)} trang Word thành ảnh để AI đọc công thức.'
-                        )
+                file_content = extract_text_from_pdf(temp_path)
+                if file_content.startswith('Lỗi khi đọc PDF'):
+                    flash(file_content, 'error')
+                    return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
+                page_images = render_pdf_pages_for_ai(temp_path, max_pages=max_pages, zoom=1.8)
+                if not page_images:
+                    flash('Server chưa render được PDF thành ảnh nên chưa thể import đề có công thức.', 'error')
+                    return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
+                import_warnings.append(
+                    f'Server đã render {len(page_images)} trang PDF thành ảnh để AI đọc công thức và phương án.'
+                )
 
                 if not (file_content or page_images):
                     flash(f'Không đọc được nội dung từ {source_label}.', 'error')
@@ -2593,7 +2611,7 @@ def teacher_create_multiple_choice(class_id=None):
                 response = model.generate_content(prompt_parts)
                 ai_text = get_gemini_text(
                     response,
-                    'AI chưa trả về dữ liệu câu hỏi. Vui lòng thử lại hoặc xuất file Word sang PDF rõ nét hơn.'
+                    'AI chưa trả về dữ liệu câu hỏi. Vui lòng thử lại với PDF rõ nét hơn.'
                 )
                 raw_questions_data = parse_ai_json_response(ai_text)
                 questions, normalize_warnings = normalize_imported_questions(raw_questions_data)

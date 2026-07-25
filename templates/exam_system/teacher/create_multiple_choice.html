@@ -10,22 +10,22 @@
             <h2 class="text-primary">
                 <i class="fas fa-list-ul"></i> Tạo Đề Trắc Nghiệm
             </h2>
-            <p class="text-muted">Import từ file Word/PDF hoặc xem preview trước khi lưu</p>
+            <p class="text-muted">Import từ file PDF và xem preview trước khi lưu</p>
             <hr>
         </div>
     </div>
 
     <div class="row">
         <div class="col-md-10 offset-md-1">
-            <!-- Hướng dẫn import Word -->
+            <!-- Hướng dẫn import PDF -->
             <div class="card mb-4 shadow-sm">
                 <div class="card-header bg-info text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-info-circle"></i> Hướng Dẫn Import Từ Word
+                        <i class="fas fa-info-circle"></i> Hướng Dẫn Import Từ PDF
                     </h5>
                 </div>
                 <div class="card-body">
-                    <p><strong>Format file Word/PDF chuẩn:</strong></p>
+                    <p><strong>Format file PDF chuẩn:</strong></p>
                     <div class="bg-light p-3 rounded mb-3">
                         <pre class="mb-0"><code>Câu 1: Phương trình bậc nhất một ẩn có dạng như thế nào?
 A. ax + b = 0 (a ≠ 0)
@@ -51,8 +51,9 @@ Giải thích: 2x = 4 => x = 2</code></pre>
                             <li>4 đáp án A, B, C, D mỗi đáp án một dòng</li>
                             <li>Dòng "Đáp án: [A/B/C/D]"</li>
                             <li>Có thể thêm "Giải thích:" (không bắt buộc)</li>
-                            <li>Hỗ trợ .docx và .pdf</li>
-                            <li>Với đề có nhiều công thức MathType/OLE, nên xuất Word sang PDF rồi import để AI đọc đúng công thức hơn</li>
+                            <li>Chỉ hỗ trợ file .pdf</li>
+                            <li>Nếu soạn đề bằng Word hoặc WPS, hãy xuất sang PDF trước rồi import để AI đọc công thức trực tiếp từ ảnh trang PDF</li>
+                            <li>Nếu PDF mờ, thiếu trang hoặc công thức không rõ, hệ thống sẽ báo lỗi ở bước preview thay vì lưu đề sai</li>
                         </ul>
                     </div>
 
@@ -64,34 +65,34 @@ Giải thích: 2x = 4 => x = 2</code></pre>
 
             <div class="create-mode-picker mb-4">
                 <button type="button" class="btn btn-primary btn-lg" id="wordModeButton" onclick="showCreateMode('word')">
-                    <i class="fas fa-file-word"></i> Import từ Word/PDF
+                    <i class="fas fa-file-pdf"></i> Import từ PDF
                 </button>
                 <button type="button" class="btn btn-secondary btn-lg" id="manualModeButton" onclick="showCreateMode('manual')">
                     <i class="fas fa-keyboard"></i> Tạo thủ công
                 </button>
             </div>
 
-            <!-- Form Upload Word/PDF -->
+            <!-- Form Upload PDF -->
             <div class="card shadow mb-4 create-mode-panel" id="wordModePanel" style="display: none;">
                 <div class="card-header bg-primary text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-upload"></i> Bước 1: Upload File Word/PDF
+                        <i class="fas fa-upload"></i> Bước 1: Upload File PDF
                     </h5>
                 </div>
                 <div class="card-body">
                     <form method="POST" enctype="multipart/form-data" id="uploadForm">
                         <div class="form-group">
                             <label for="word_file">
-                                <i class="fas fa-file-word"></i> Chọn File Word/PDF (.docx, .pdf) <span class="text-danger">*</span>
+                                <i class="fas fa-file-pdf"></i> Chọn File PDF (.pdf) <span class="text-danger">*</span>
                             </label>
                             <div class="custom-file">
                                 <input type="file" 
                                        class="custom-file-input" 
                                        id="word_file" 
                                        name="word_file"
-                                       accept=".docx,.pdf"
+                                       accept=".pdf"
                                        required>
-                                <label class="custom-file-label" for="word_file">Chọn file .docx hoặc .pdf...</label>
+                                <label class="custom-file-label" for="word_file">Chọn file .pdf...</label>
                             </div>
                         </div>
 
@@ -183,7 +184,7 @@ Giải thích: 2x = 4 => x = 2</code></pre>
                     </h6>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted">Sau khi upload file Word/PDF, hệ thống sẽ hiển thị preview để bạn kiểm tra trước khi lưu.</p>
+                    <p class="text-muted">Sau khi upload file PDF, hệ thống sẽ hiển thị preview để bạn kiểm tra trước khi lưu.</p>
                     
                     <div class="border rounded p-3 bg-light">
                         <h6 class="text-primary">Ví dụ preview:</h6>
@@ -233,7 +234,7 @@ function showCreateMode(mode) {
 
 // Hiển thị tên file khi chọn
 document.getElementById('word_file').addEventListener('change', function(e) {
-    var fileName = e.target.files[0]?.name || 'Chọn file .docx hoặc .pdf...';
+    var fileName = e.target.files[0]?.name || 'Chọn file .pdf...';
     document.querySelector('.custom-file-label').textContent = fileName;
 });
 
