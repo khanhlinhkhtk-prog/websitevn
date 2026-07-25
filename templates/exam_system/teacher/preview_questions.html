@@ -20,9 +20,9 @@
             <!-- Alert thành công -->
             <div class="alert alert-success alert-dismissible fade show" role="alert">
                 <i class="fas fa-check-circle"></i> 
-                <strong>Parse thành công!</strong> Đã phân tích được <strong>{{ questions|length }}</strong> câu hỏi từ file Word.
+                <strong>Parse thành công!</strong> Đã phân tích được <strong>{{ questions|length }}</strong> câu hỏi từ file đề.
                 {% if expected_question_count %}
-                    File Word phát hiện khoảng <strong>{{ expected_question_count }}</strong> câu.
+                    File đề phát hiện khoảng <strong>{{ expected_question_count }}</strong> câu.
                 {% endif %}
                 <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Đóng"></button>
             </div>

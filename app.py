@@ -2314,12 +2314,12 @@ def normalize_imported_questions(raw_data):
     return normalized, warnings
 
 
-def validate_imported_questions(questions, source_text):
+def validate_imported_questions(questions, source_text, source_label='file'):
     errors = []
     warnings = []
 
     if not questions:
-        errors.append('AI chưa parse được câu hỏi nào từ file Word.')
+        errors.append(f'AI chưa parse được câu hỏi nào từ {source_label}.')
         return errors, warnings
 
     expected_numbers = extract_question_numbers_from_text(source_text)
@@ -2329,7 +2329,7 @@ def validate_imported_questions(questions, source_text):
         extra_numbers = [number for number in parsed_numbers if number not in expected_numbers]
         if missing_numbers:
             errors.append(
-                'Thiếu câu so với file Word: '
+                f'Thiếu câu so với {source_label}: '
                 + ', '.join(f'Câu {number}' for number in missing_numbers[:20])
                 + ('...' if len(missing_numbers) > 20 else '')
             )
@@ -2359,15 +2359,27 @@ def validate_imported_questions(questions, source_text):
     return errors, warnings
 
 
-def build_word_exam_parse_prompt(word_content, expected_numbers, class_obj):
+def get_exam_import_max_pages():
+    try:
+        return max(1, min(30, int(os.environ.get('EXAM_IMPORT_MAX_PAGES', '20'))))
+    except ValueError:
+        return 20
+
+
+def build_exam_file_parse_prompt(file_content, expected_numbers, class_obj, source_label, has_page_images=False):
     expected_line = (
-        f"Số câu hệ thống phát hiện trong file: {len(expected_numbers)} "
+        f"Số câu hệ thống phát hiện trong {source_label}: {len(expected_numbers)} "
         f"({', '.join('Câu ' + str(number) for number in expected_numbers[:60])})."
         if expected_numbers else
         "Hệ thống chưa đếm chắc được số câu; hãy parse toàn bộ câu hỏi nhìn thấy trong nội dung."
     )
+    image_instruction = (
+        "\n- Hệ thống có gửi kèm ảnh các trang đề. Hãy ưu tiên đọc ảnh trang vì ảnh giữ đúng công thức, phân số, căn, hệ phương trình và bố cục đáp án."
+        if has_page_images else
+        "\n- Nếu không có ảnh trang kèm theo, hãy parse dựa trên phần text trích xuất và báo thiếu nếu công thức/phương án không đọc được."
+    )
 
-    return f"""Bạn là bộ chuyển đổi đề trắc nghiệm Word sang JSON cho hệ thống thi trực tuyến.
+    return f"""Bạn là bộ chuyển đổi đề trắc nghiệm từ {source_label} sang JSON cho hệ thống thi trực tuyến.
 
 Ngữ cảnh lớp:
 - Môn: {class_obj.get('subject', '')}
@@ -2379,12 +2391,13 @@ YÊU CẦU BẮT BUỘC:
 - Chỉ lấy câu trắc nghiệm 4 lựa chọn A, B, C, D.
 - Không bỏ sót câu nào có dạng "Câu số".
 - Giữ nguyên nội dung Toán, ký hiệu và công thức đọc được; nếu viết lại công thức, dùng LaTeX inline dạng \\(...\\).
-- Nếu công thức trong Word bị mất do MathType/OLE/ảnh, để nguyên phần chữ đọc được và ghi chú ngắn trong explanation, không tự bịa công thức.
+- Nếu công thức trong phần text bị mất do MathType/OLE/ảnh, hãy đọc trên ảnh trang gửi kèm nếu có; nếu vẫn không đọc được thì ghi chú ngắn trong explanation, không tự bịa công thức.
 - correct_answer chỉ được là một chữ A, B, C hoặc D.
 - options phải có đúng 4 phần tử, mỗi phần tử bắt đầu bằng "A. ", "B. ", "C. ", "D. ".
 - Nếu trong file có dòng "Đáp án: X", dùng đúng X.
 - Nếu không xác định được đáp án, vẫn tạo câu nhưng để correct_answer là "" để hệ thống cảnh báo.
 - Chỉ trả về JSON hợp lệ, không markdown, không ```json.
+{image_instruction}
 
 Schema:
 {{
@@ -2399,8 +2412,8 @@ Schema:
   ]
 }}
 
-NỘI DUNG WORD ĐÃ TRÍCH XUẤT:
-{word_content[:18000]}
+NỘI DUNG TEXT ĐÃ TRÍCH XUẤT TỪ {source_label.upper()}:
+{file_content[:18000]}
 """
 
 
@@ -2511,56 +2524,84 @@ def teacher_create_multiple_choice(class_id=None):
             return redirect(url_for('teacher_class_detail', class_id=class_id))
 
         if 'word_file' in request.files:
-            word_file = request.files['word_file']
-            if not word_file or not word_file.filename:
-                flash('Vui lòng chọn file Word .docx.', 'error')
+            import_file = request.files['word_file']
+            if not import_file or not import_file.filename:
+                flash('Vui lòng chọn file Word .docx hoặc PDF.', 'error')
                 return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
-            if not word_file.filename.lower().endswith('.docx'):
-                flash('Chức năng này chỉ hỗ trợ file .docx.', 'error')
+            original_filename = import_file.filename
+            file_ext = original_filename.rsplit('.', 1)[1].lower() if '.' in original_filename else ''
+            if file_ext not in {'docx', 'pdf'}:
+                flash('Chức năng này chỉ hỗ trợ file .docx hoặc .pdf.', 'error')
                 return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
             temp_path = None
             try:
-                temp_filename = f"exam_import_{uuid.uuid4()}_{secure_filename(word_file.filename)}"
+                temp_filename = f"exam_import_{uuid.uuid4()}_{secure_filename(original_filename)}"
                 temp_path = os.path.join(app.config['UPLOAD_FOLDER'], temp_filename)
-                word_file.save(temp_path)
+                import_file.save(temp_path)
 
-                word_content = extract_text_from_docx(temp_path)
-                if not word_content or word_content.startswith('Lỗi khi đọc DOCX'):
-                    flash(word_content or 'Không đọc được nội dung file Word.', 'error')
+                source_label = 'file PDF' if file_ext == 'pdf' else 'file Word'
+                import_warnings = []
+                max_pages = get_exam_import_max_pages()
+
+                if file_ext == 'pdf':
+                    file_content = extract_text_from_pdf(temp_path)
+                    if file_content.startswith('Lỗi khi đọc PDF'):
+                        flash(file_content, 'error')
+                        return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
+                    page_images = render_pdf_pages_for_ai(temp_path, max_pages=max_pages, zoom=1.6)
+                    if not page_images:
+                        import_warnings.append('Server chưa render được PDF thành ảnh; AI sẽ parse chủ yếu từ text trích xuất.')
+                else:
+                    file_content = extract_text_from_docx(temp_path)
+                    if not file_content or file_content.startswith('Lỗi khi đọc DOCX'):
+                        flash(file_content or 'Không đọc được nội dung file Word.', 'error')
+                        return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
+                    page_images = render_docx_pages_for_ai(temp_path, max_pages=max_pages)
+                    if not page_images:
+                        import_warnings.append(
+                            'Server chưa convert Word sang ảnh/PDF được. Nếu công thức MathType/OLE bị mất, hãy xuất file Word sang PDF rồi import lại.'
+                        )
+                        page_images = extract_docx_images_for_ai(temp_path, max_images=8)
+                    else:
+                        import_warnings.append(
+                            f'Server đã render tối đa {len(page_images)} trang Word thành ảnh để AI đọc công thức.'
+                        )
+
+                if not (file_content or page_images):
+                    flash(f'Không đọc được nội dung từ {source_label}.', 'error')
                     return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
-                expected_numbers = extract_question_numbers_from_text(word_content)
-                prompt = build_word_exam_parse_prompt(word_content, expected_numbers, class_obj)
+                expected_numbers = extract_question_numbers_from_text(file_content)
+                prompt = build_exam_file_parse_prompt(
+                    file_content,
+                    expected_numbers,
+                    class_obj,
+                    source_label,
+                    has_page_images=bool(page_images)
+                )
                 prompt_parts = [prompt]
 
-                docx_images = render_docx_pages_for_ai(temp_path)
-                image_note = (
-                    "\n\nHệ thống đã gửi kèm ảnh render từ vài trang đầu DOCX. "
-                    "Hãy dùng ảnh để đọc công thức, bố cục đáp án và hình vẽ nếu nhìn rõ."
-                )
-                if not docx_images:
-                    docx_images = extract_docx_images_for_ai(temp_path)
+                if page_images:
                     image_note = (
-                        "\n\nHệ thống đã gửi kèm một số ảnh PNG/JPG trích từ DOCX. "
-                        "Hãy dùng ảnh để đọc công thức hoặc hình vẽ nếu nhìn rõ."
+                        f"\n\nHệ thống gửi kèm {len(page_images)} ảnh trang từ {source_label}. "
+                        "Hãy đọc trực tiếp ảnh trang để giữ đúng công thức và phương án."
                     )
-                if docx_images:
-                    prompt_parts = docx_images + [prompt + image_note]
+                    prompt_parts = page_images + [prompt + image_note]
 
                 response = model.generate_content(prompt_parts)
                 ai_text = get_gemini_text(
                     response,
-                    'AI chưa trả về dữ liệu câu hỏi. Vui lòng thử lại hoặc đổi file Word sang PDF rõ nét hơn.'
+                    'AI chưa trả về dữ liệu câu hỏi. Vui lòng thử lại hoặc xuất file Word sang PDF rõ nét hơn.'
                 )
                 raw_questions_data = parse_ai_json_response(ai_text)
                 questions, normalize_warnings = normalize_imported_questions(raw_questions_data)
-                parse_errors, parse_warnings = validate_imported_questions(questions, word_content)
-                parse_warnings = normalize_warnings + parse_warnings
+                parse_errors, parse_warnings = validate_imported_questions(questions, file_content, source_label)
+                parse_warnings = import_warnings + normalize_warnings + parse_warnings
 
                 if not questions:
-                    flash('AI chưa parse được câu hỏi nào từ file Word.', 'error')
+                    flash(f'AI chưa parse được câu hỏi nào từ {source_label}.', 'error')
                     return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
                 questions_data = {'questions': questions}
@@ -2592,7 +2633,7 @@ def teacher_create_multiple_choice(class_id=None):
             grade = request.form.get('grade', '').strip() or class_obj.get('grade', '')
             parse_errors = json.loads(request.form.get('parse_errors_json') or '[]')
             if parse_errors:
-                flash('Đề import còn lỗi parse nên chưa thể lưu. Vui lòng quay lại kiểm tra file Word.', 'error')
+                flash('Đề import còn lỗi parse nên chưa thể lưu. Vui lòng quay lại kiểm tra file đề.', 'error')
                 return redirect(url_for('teacher_create_multiple_choice', class_id=class_id))
 
             questions_json = request.form.get('questions_json')
