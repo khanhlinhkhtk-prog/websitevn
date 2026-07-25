@@ -2422,6 +2422,7 @@ YÊU CẦU BẮT BUỘC:
 - Giữ nguyên nội dung Toán, ký hiệu và công thức đọc được; nếu viết lại công thức, dùng LaTeX inline dạng \\(...\\).
 - Nếu công thức trong phần text bị mất do MathType/OLE/ảnh, hãy đọc trên ảnh trang gửi kèm nếu có; nếu vẫn không đọc được thì ghi chú ngắn trong explanation, không tự bịa công thức.
 - TUYỆT ĐỐI không được điền placeholder như "[CÔNG THỨC BỊ THIẾU]", "[MISSING_FORMULA]", "công thức bị thiếu" vào question hoặc options. Nếu không đọc được công thức quan trọng của câu/phương án thì vẫn để phần đó trống/ghi chú để hệ thống báo lỗi, không tự tạo đề rác.
+- Khi trả JSON có LaTeX, mọi dấu gạch chéo phải escape đúng JSON: viết "\\\\sqrt{{x}}", "\\\\frac{{a}}{{b}}", "\\\\(x^2\\\\)", không viết "\\sqrt{{x}}" hoặc "\\(x^2\\)".
 - correct_answer chỉ được là một chữ A, B, C hoặc D.
 - options phải có đúng 4 phần tử, mỗi phần tử bắt đầu bằng "A. ", "B. ", "C. ", "D. ".
 - Nếu trong file có dòng "Đáp án: X", dùng đúng X.
@@ -5711,7 +5712,30 @@ def parse_ai_json_response(raw_text):
     if match:
         cleaned = match.group(0)
 
-    return json.loads(cleaned)
+    latex_commands = (
+        'sqrt|frac|pm|mp|leq?|geq?|neq?|times|div|cdot|alpha|beta|gamma|delta|'
+        'pi|theta|sin|cos|tan|cot|log|ln|lim|begin|end|left|right|overline|'
+        'underline|widehat|angle|triangle|circ|parallel|perp|infty|notin|cup|'
+        'cap|subset|supset|approx|sim|rightarrow|leftarrow|leftrightarrow|to|'
+        'vec|bar|hat|text|quad|qquad'
+    )
+    latex_pattern = rf'(?<!\\)\\(?!\\)(?=(?:{latex_commands})\b|[()[\]{{}}])'
+    escaped_latex = re.sub(latex_pattern, r'\\\\', cleaned)
+    escaped_latex = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', escaped_latex)
+
+    candidates = [escaped_latex]
+    if escaped_latex != cleaned:
+        candidates.append(cleaned)
+
+    first_error = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as error:
+            if first_error is None:
+                first_error = error
+
+    raise first_error
 
 
 def fallback_health_triage(question_text):
