@@ -426,21 +426,129 @@
             background: #0d9488;
         }
 
-        .mindmap-viewer {
-            display: none;
-            flex: 1;
-            min-height: 0;
-            background: #f8fbff;
-            flex-direction: column;
+        .mindmap-card {
+            width: min(100%, 680px);
+            background: #ffffff;
+            border: 1px solid #bfdbfe;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 12px 30px rgba(37, 99, 235, 0.12);
         }
 
-        .chat-container.mindmap-mode .chat-messages,
-        .chat-container.mindmap-mode .chat-input-container {
-            display: none;
-        }
-
-        .chat-container.mindmap-mode .mindmap-viewer {
+        .mindmap-card-header {
+            padding: 12px 14px;
             display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px solid #dbeafe;
+        }
+
+        .mindmap-card-title {
+            min-width: 0;
+            color: #123a7a;
+            font-size: 15px;
+            font-weight: 700;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .mindmap-card-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .mindmap-card-btn,
+        .mindmap-viewer-btn {
+            min-height: 36px;
+            padding: 0 12px;
+            border: 1px solid #7fb3ff;
+            border-radius: 6px;
+            background: #ffffff;
+            color: #123a7a;
+            cursor: pointer;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+        }
+
+        .mindmap-card-btn:hover,
+        .mindmap-viewer-btn:hover {
+            background: #eef6ff;
+        }
+
+        .mindmap-card-btn:disabled,
+        .mindmap-viewer-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .mindmap-card-btn.primary,
+        .mindmap-viewer-btn.primary {
+            background: #2563eb;
+            border-color: #2563eb;
+            color: #ffffff;
+        }
+
+        .mindmap-card-preview {
+            width: 100%;
+            height: 320px;
+            border: 0;
+            background: #f8fbff;
+            display: block;
+            cursor: zoom-in;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mindmap-card-preview iframe {
+            width: 1180px;
+            height: 780px;
+            border: 0;
+            pointer-events: none;
+            transform: scale(0.54);
+            transform-origin: top left;
+            background: #ffffff;
+        }
+
+        .mindmap-card-hint {
+            padding: 10px 14px;
+            color: #4f6f9f;
+            font-size: 13px;
+            border-top: 1px solid #dbeafe;
+        }
+
+        .mindmap-viewer {
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+            display: none;
+            background: rgba(15, 23, 42, 0.72);
+            padding: 18px;
+        }
+
+        .mindmap-viewer.is-open {
+            display: flex;
+        }
+
+        .mindmap-viewer-panel {
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 24px 70px rgba(15, 23, 42, 0.32);
         }
 
         .mindmap-viewer-toolbar {
@@ -468,39 +576,6 @@
             align-items: center;
             gap: 8px;
             flex-shrink: 0;
-        }
-
-        .mindmap-viewer-btn {
-            height: 36px;
-            padding: 0 12px;
-            border: 1px solid #7fb3ff;
-            border-radius: 6px;
-            background: #ffffff;
-            color: #123a7a;
-            cursor: pointer;
-            font: inherit;
-            font-size: 14px;
-            font-weight: 600;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            white-space: nowrap;
-        }
-
-        .mindmap-viewer-btn:hover {
-            background: #eef6ff;
-        }
-
-        .mindmap-viewer-btn:disabled {
-            opacity: 0.55;
-            cursor: not-allowed;
-        }
-
-        .mindmap-viewer-btn.primary {
-            background: #2563eb;
-            border-color: #2563eb;
-            color: #ffffff;
         }
 
         .mindmap-viewer-frame {
@@ -555,6 +630,28 @@
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
             }
+
+            .mindmap-card-header {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .mindmap-card-actions {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .mindmap-card-preview {
+                height: 260px;
+            }
+
+            .mindmap-card-preview iframe {
+                transform: scale(0.32);
+            }
+
+            .mindmap-viewer {
+                padding: 8px;
+            }
         }
     </style>
     <script>
@@ -600,7 +697,30 @@
                     <div class="message message-bot">
                         <div class="message-wrapper">
                             <div class="message-avatar avatar-bot">🤖</div>
-                            <div class="message-content">{{ msg.bot }}</div>
+                            <div class="message-content">
+                                {% if msg.mindmap %}
+                                    <div
+                                        class="mindmap-card"
+                                        data-url="{{ msg.mindmap.url }}"
+                                        data-title="{{ msg.mindmap.title }}"
+                                        data-filename="{{ msg.mindmap.filename }}"
+                                    >
+                                        <div class="mindmap-card-header">
+                                            <div class="mindmap-card-title">{{ msg.mindmap.title }}</div>
+                                            <div class="mindmap-card-actions">
+                                                <button type="button" class="mindmap-card-btn primary mindmap-card-png-btn">Tải PNG</button>
+                                                <a class="mindmap-card-btn" href="{{ msg.mindmap.url }}" download="{{ msg.mindmap.filename }}">Tải HTML</a>
+                                            </div>
+                                        </div>
+                                        <div class="mindmap-card-preview" role="button" tabindex="0" aria-label="Xem sơ đồ tư duy">
+                                            <iframe src="{{ msg.mindmap.url }}" title="{{ msg.mindmap.title }}"></iframe>
+                                        </div>
+                                        <div class="mindmap-card-hint">Bấm vào sơ đồ để xem rõ hơn.</div>
+                                    </div>
+                                {% else %}
+                                    {{ msg.bot }}
+                                {% endif %}
+                            </div>
                         </div>
                     </div>
                 {% endfor %}
@@ -642,18 +762,20 @@
             {% endif %}
         </div>
 
-        <div class="mindmap-viewer" id="mindmapViewer" hidden>
+        <div class="mindmap-viewer" id="mindmapViewer" aria-hidden="true">
+            <div class="mindmap-viewer-panel">
             <div class="mindmap-viewer-toolbar">
                 <div class="mindmap-viewer-title" id="mindmapViewerTitle">Sơ đồ tư duy</div>
                 <div class="mindmap-viewer-actions">
-                    <button type="button" class="mindmap-viewer-btn" id="mindmapBackBtn">Quay lại</button>
                     <button type="button" class="mindmap-viewer-btn primary" id="mindmapPngBtn">Tải PNG</button>
                     <a class="mindmap-viewer-btn" id="mindmapDownloadBtn" href="#" download>Tải HTML</a>
+                    <button type="button" class="mindmap-viewer-btn" id="mindmapBackBtn" aria-label="Đóng">X</button>
                 </div>
             </div>
             <iframe class="mindmap-viewer-frame" id="mindmapFrame" title="Sơ đồ tư duy"></iframe>
         </div>
 
+            </div>
         <div class="chat-input-container">
             <div class="chat-input-wrapper">
                 <form method="POST" enctype="multipart/form-data" id="chatForm">
@@ -708,7 +830,10 @@
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
         
-        window.onload = scrollToBottom;
+        window.onload = function() {
+            initializeMindmapCards();
+            scrollToBottom();
+        };
 
         function showFilePreview() {
             const fileInput = document.getElementById('fileInput');
@@ -800,7 +925,6 @@
             filePreviewArea.classList.remove('active');
         }
 
-        const chatContainer = document.querySelector('.chat-container');
         const mindmapViewer = document.getElementById('mindmapViewer');
         const mindmapFrame = document.getElementById('mindmapFrame');
         const mindmapViewerTitle = document.getElementById('mindmapViewerTitle');
@@ -810,42 +934,181 @@
         const mindmapForm = document.getElementById('mindmapForm');
         const mindmapSubmitBtn = document.getElementById('mindmapSubmitBtn');
 
+        function downloadPngFromFrame(frame, button) {
+            const oldText = button ? button.textContent : '';
+            try {
+                if (frame && frame.contentWindow && typeof frame.contentWindow.downloadPng === 'function') {
+                    if (button) {
+                        button.disabled = true;
+                        button.textContent = 'Đang tải...';
+                    }
+                    frame.contentWindow.downloadPng();
+                    return;
+                }
+                alert('Sơ đồ chưa tải xong. Em thử lại sau vài giây nhé.');
+            } finally {
+                if (button) {
+                    setTimeout(function() {
+                        button.disabled = false;
+                        button.textContent = oldText || 'Tải PNG';
+                    }, 900);
+                }
+            }
+        }
+
         function showMindmap(url, title, filename) {
-            mindmapViewer.hidden = false;
+            mindmapViewer.classList.add('is-open');
+            mindmapViewer.setAttribute('aria-hidden', 'false');
             mindmapViewerTitle.textContent = title || 'Sơ đồ tư duy';
             mindmapDownloadBtn.href = url;
             mindmapDownloadBtn.download = filename || 'so-do-tu-duy.html';
             mindmapPngBtn.disabled = true;
             mindmapFrame.src = url;
-            chatContainer.classList.add('mindmap-mode');
         }
 
         function hideMindmap() {
-            chatContainer.classList.remove('mindmap-mode');
+            mindmapViewer.classList.remove('is-open');
+            mindmapViewer.setAttribute('aria-hidden', 'true');
             mindmapFrame.src = 'about:blank';
-            mindmapViewer.hidden = true;
             scrollToBottom();
         }
 
         mindmapBackBtn.addEventListener('click', hideMindmap);
+        mindmapViewer.addEventListener('click', function(e) {
+            if (e.target === mindmapViewer) {
+                hideMindmap();
+            }
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && mindmapViewer.classList.contains('is-open')) {
+                hideMindmap();
+            }
+        });
         mindmapFrame.addEventListener('load', function() {
             mindmapPngBtn.disabled = false;
         });
 
         mindmapPngBtn.addEventListener('click', function() {
-            const frameWindow = mindmapFrame.contentWindow;
-            if (frameWindow && typeof frameWindow.downloadPng === 'function') {
-                frameWindow.downloadPng();
-            }
+            downloadPngFromFrame(mindmapFrame, mindmapPngBtn);
         });
+
+        function initMindmapCard(card) {
+            if (!card || card.dataset.ready === 'yes') {
+                return;
+            }
+            card.dataset.ready = 'yes';
+
+            const preview = card.querySelector('.mindmap-card-preview');
+            const frame = card.querySelector('iframe');
+            const pngBtn = card.querySelector('.mindmap-card-png-btn');
+
+            if (pngBtn) {
+                pngBtn.disabled = true;
+            }
+            if (frame) {
+                frame.addEventListener('load', function() {
+                    if (pngBtn) {
+                        pngBtn.disabled = false;
+                    }
+                });
+            }
+            if (preview) {
+                preview.addEventListener('click', function() {
+                    showMindmap(card.dataset.url, card.dataset.title, card.dataset.filename);
+                });
+                preview.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        showMindmap(card.dataset.url, card.dataset.title, card.dataset.filename);
+                    }
+                });
+            }
+            if (pngBtn) {
+                pngBtn.addEventListener('click', function() {
+                    downloadPngFromFrame(frame, pngBtn);
+                });
+            }
+        }
+
+        function initializeMindmapCards() {
+            document.querySelectorAll('.mindmap-card').forEach(initMindmapCard);
+        }
+
+        function createMindmapCard(data) {
+            const card = document.createElement('div');
+            card.className = 'mindmap-card';
+            card.dataset.url = data.url;
+            card.dataset.title = data.title || 'Sơ đồ tư duy';
+            card.dataset.filename = data.filename || 'so-do-tu-duy.html';
+
+            const header = document.createElement('div');
+            header.className = 'mindmap-card-header';
+
+            const title = document.createElement('div');
+            title.className = 'mindmap-card-title';
+            title.textContent = card.dataset.title;
+
+            const actions = document.createElement('div');
+            actions.className = 'mindmap-card-actions';
+
+            const pngButton = document.createElement('button');
+            pngButton.type = 'button';
+            pngButton.className = 'mindmap-card-btn primary mindmap-card-png-btn';
+            pngButton.textContent = 'Tải PNG';
+
+            const htmlLink = document.createElement('a');
+            htmlLink.className = 'mindmap-card-btn';
+            htmlLink.href = data.url;
+            htmlLink.download = card.dataset.filename;
+            htmlLink.textContent = 'Tải HTML';
+
+            actions.appendChild(pngButton);
+            actions.appendChild(htmlLink);
+            header.appendChild(title);
+            header.appendChild(actions);
+
+            const preview = document.createElement('div');
+            preview.className = 'mindmap-card-preview';
+            preview.setAttribute('role', 'button');
+            preview.setAttribute('tabindex', '0');
+            preview.setAttribute('aria-label', 'Xem sơ đồ tư duy');
+
+            const frame = document.createElement('iframe');
+            frame.src = data.url;
+            frame.title = card.dataset.title;
+            preview.appendChild(frame);
+
+            const hint = document.createElement('div');
+            hint.className = 'mindmap-card-hint';
+            hint.textContent = 'Bấm vào sơ đồ để xem rõ hơn.';
+
+            card.appendChild(header);
+            card.appendChild(preview);
+            card.appendChild(hint);
+            initMindmapCard(card);
+            return card;
+        }
+
+        function replaceWithMindmapCard(pendingBot, data) {
+            pendingBot.message.classList.remove('message-pending');
+            pendingBot.content.textContent = '';
+            pendingBot.content.appendChild(createMindmapCard(data));
+            scrollToBottom();
+        }
 
         mindmapForm.addEventListener('submit', async function(e) {
             e.preventDefault();
 
             const formData = new FormData(this);
+            const topicInput = this.querySelector('[name="mindmap_topic"]');
+            const topic = topicInput ? topicInput.value.trim() : '';
+            const userText = topic ? `Tạo sơ đồ tư duy: ${topic}` : 'Tạo sơ đồ tư duy từ cuộc trò chuyện';
             const originalText = mindmapSubmitBtn.textContent;
             mindmapSubmitBtn.disabled = true;
             mindmapSubmitBtn.textContent = 'Đang tạo...';
+            removeWelcomeScreen();
+            createMessage('user', userText);
+            const pendingBot = createMessage('bot', 'Tri-hand đang tạo sơ đồ tư duy...', true);
 
             try {
                 const response = await fetch(this.action, {
@@ -858,15 +1121,18 @@
                 const data = await response.json();
 
                 if (!response.ok || !data.success) {
-                    removeWelcomeScreen();
-                    createMessage('bot', data.bot || 'Chưa có nội dung để tạo sơ đồ tư duy.');
+                    pendingBot.message.classList.remove('message-pending');
+                    pendingBot.content.textContent = data.bot || 'Chưa có nội dung để tạo sơ đồ tư duy.';
                     return;
                 }
 
-                showMindmap(data.url, data.title, data.filename);
+                replaceWithMindmapCard(pendingBot, data);
+                if (topicInput) {
+                    topicInput.value = '';
+                }
             } catch (error) {
-                removeWelcomeScreen();
-                createMessage('bot', 'Có lỗi khi tạo sơ đồ tư duy. Em thử lại giúp Tri-hand nhé.');
+                pendingBot.message.classList.remove('message-pending');
+                pendingBot.content.textContent = 'Có lỗi khi tạo sơ đồ tư duy. Em thử lại giúp Tri-hand nhé.';
             } finally {
                 mindmapSubmitBtn.disabled = false;
                 mindmapSubmitBtn.textContent = originalText;

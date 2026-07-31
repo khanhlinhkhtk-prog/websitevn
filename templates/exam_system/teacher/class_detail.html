@@ -180,7 +180,7 @@
                         <hr>
                         <h6 class="small text-muted">Câu hỏi sai nhiều</h6>
                         {% for item in class_analysis.question_error_rows[:3] %}
-                            <div class="small mb-2">
+                            <div class="small mb-2 frequent-wrong-question">
                                 <strong>{{ item.wrong_count }} lỗi:</strong> {{ item.question }}
                             </div>
                         {% endfor %}
@@ -518,6 +518,15 @@
     color: #475569;
     margin-bottom: 8px;
 }
+.frequent-wrong-question {
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+.frequent-wrong-question mjx-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+}
 .join-box {
     min-width: min(100%, 360px);
     background: #fff;
@@ -553,4 +562,30 @@
     }
 }
 </style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+window.MathJax = {
+    tex: {
+        inlineMath: [['\\(', '\\)'], ['$', '$']],
+        displayMath: [['\\[', '\\]'], ['$$', '$$']],
+        processEscapes: true
+    },
+    svg: {
+        fontCache: 'global'
+    },
+    startup: {
+        pageReady: function() {
+            return MathJax.startup.defaultPageReady().then(function() {
+                const questionArea = document.querySelectorAll('.frequent-wrong-question');
+                if (questionArea.length && MathJax.typesetPromise) {
+                    return MathJax.typesetPromise(questionArea);
+                }
+            });
+        }
+    }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
 {% endblock %}

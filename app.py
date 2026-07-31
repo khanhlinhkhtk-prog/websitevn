@@ -748,6 +748,35 @@ def classify_error_topic(text):
     return 'Kiến thức khác'
 
 
+def replacement_marker_count(text):
+    text = str(text or '')
+    return len(re.findall(r'\?{2,}|(?<=[A-Za-zÀ-ỹ])\?(?=[A-Za-zÀ-ỹ])', text))
+
+
+def get_exam_question_text(exam, question_id):
+    if not exam or question_id in (None, ''):
+        return ''
+
+    question_id_text = str(question_id)
+    for question in exam.get('questions', []):
+        if str(question.get('id')) == question_id_text:
+            return str(question.get('question', '')).strip()
+    return ''
+
+
+def choose_clean_question_text(result_question, exam_question):
+    result_question = str(result_question or '').strip()
+    exam_question = str(exam_question or '').strip()
+    if not result_question:
+        return exam_question
+    if not exam_question:
+        return result_question
+
+    if replacement_marker_count(result_question) > replacement_marker_count(exam_question):
+        return exam_question
+    return result_question
+
+
 def build_teacher_class_analysis(class_obj, students=None, exams=None, submissions=None):
     class_id = class_obj.get('id')
     users = load_exam_users()
@@ -817,12 +846,16 @@ def build_teacher_class_analysis(class_obj, students=None, exams=None, submissio
                 continue
 
             total_wrong_answers += 1
-            question_text = result.get('question', '')
+            exam = exam_lookup.get(sub.get('exam_id'))
+            exam_question = get_exam_question_text(exam, result.get('question_id'))
+            question_text = normalize_latex_slashes(
+                choose_clean_question_text(result.get('question', ''), exam_question)
+            )
             topic = classify_error_topic(
                 f"{question_text} {result.get('explanation', '')} {result.get('feedback', '')}"
             )
             error_topics[topic] = error_topics.get(topic, 0) + 1
-            key = question_text[:140] or f"Câu {result.get('question_id', '')}"
+            key = question_text or f"Câu {result.get('question_id', '')}"
             question_errors[key] = question_errors.get(key, 0) + 1
 
     error_rows = [
@@ -2314,6 +2347,76 @@ def normalize_imported_questions(raw_data):
     return normalized, warnings
 
 
+def normalize_imported_essay_questions(raw_data):
+    if isinstance(raw_data, list):
+        raw_questions = raw_data
+    elif isinstance(raw_data, dict):
+        raw_questions = (
+            raw_data.get('questions')
+            or raw_data.get('essay_questions')
+            or raw_data.get('cau_hoi')
+            or []
+        )
+    else:
+        raw_questions = []
+
+    normalized = []
+    warnings = []
+    for index, raw_question in enumerate(raw_questions, 1):
+        if not isinstance(raw_question, dict):
+            warnings.append(f'Bỏ qua mục thứ {index} vì không phải dữ liệu câu hỏi hợp lệ.')
+            continue
+
+        question_id = raw_question.get('id') or raw_question.get('number') or raw_question.get('question_number') or index
+        try:
+            question_id = int(question_id)
+        except (TypeError, ValueError):
+            question_id = index
+
+        question_text = str(
+            raw_question.get('question')
+            or raw_question.get('question_text')
+            or raw_question.get('content')
+            or raw_question.get('text')
+            or ''
+        ).strip()
+
+        points_raw = (
+            raw_question.get('points')
+            or raw_question.get('score')
+            or raw_question.get('max_points')
+            or raw_question.get('diem')
+            or 10
+        )
+        try:
+            points = int(round(float(points_raw)))
+        except (TypeError, ValueError):
+            points = 10
+            warnings.append(f'Câu {question_id} không đọc được điểm, hệ thống tạm đặt 10 điểm.')
+        points = max(1, min(100, points))
+
+        suggested_answer = str(
+            raw_question.get('suggested_answer')
+            or raw_question.get('suggested')
+            or raw_question.get('answer')
+            or raw_question.get('rubric')
+            or raw_question.get('grading_guide')
+            or raw_question.get('huong_dan_cham')
+            or raw_question.get('dap_an_goi_y')
+            or ''
+        ).strip()
+
+        normalized.append({
+            'id': question_id,
+            'question': question_text,
+            'points': points,
+            'suggested_answer': suggested_answer
+        })
+
+    normalized.sort(key=lambda item: item['id'])
+    return normalized, warnings
+
+
 def is_missing_formula_placeholder(value):
     text = str(value or '').strip()
     if not text:
@@ -2333,6 +2436,16 @@ def is_missing_formula_placeholder(value):
         '[missing',
     ]
     return any(marker in folded for marker in markers)
+
+
+def extract_essay_question_numbers_from_text(text):
+    numbers = []
+    for match in re.finditer(r'(?:^|\n)\s*(?:Câu|Bài)\s*(\d+)\b', str(text or ''), flags=re.IGNORECASE):
+        try:
+            numbers.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return sorted(set(numbers))
 
 
 def validate_imported_questions(questions, source_text, source_label='file'):
@@ -2388,11 +2501,115 @@ def validate_imported_questions(questions, source_text, source_label='file'):
     return errors, warnings
 
 
+def validate_imported_essay_questions(questions, source_text, source_label='file'):
+    errors = []
+    warnings = []
+
+    if not questions:
+        errors.append(f'AI chưa parse được câu hỏi tự luận nào từ {source_label}.')
+        return errors, warnings
+
+    expected_numbers = extract_essay_question_numbers_from_text(source_text)
+    parsed_numbers = sorted({q.get('id') for q in questions if isinstance(q.get('id'), int)})
+    if expected_numbers:
+        missing_numbers = [number for number in expected_numbers if number not in parsed_numbers]
+        extra_numbers = [number for number in parsed_numbers if number not in expected_numbers]
+        if missing_numbers:
+            errors.append(
+                f'Thiếu câu/bài so với {source_label}: '
+                + ', '.join(f'Câu {number}' for number in missing_numbers[:20])
+                + ('...' if len(missing_numbers) > 20 else '')
+            )
+        if extra_numbers:
+            warnings.append(
+                'AI tạo thêm số câu/bài không thấy rõ trong file: '
+                + ', '.join(f'Câu {number}' for number in extra_numbers[:20])
+            )
+
+    seen_ids = set()
+    for index, question in enumerate(questions, 1):
+        question_id = question.get('id') or index
+        if question_id in seen_ids:
+            errors.append(f'Câu {question_id} bị trùng số thứ tự.')
+        seen_ids.add(question_id)
+
+        if not question.get('question'):
+            errors.append(f'Câu {question_id} thiếu nội dung câu hỏi.')
+        elif is_missing_formula_placeholder(question.get('question')):
+            errors.append(f'Câu {question_id} còn placeholder công thức trong nội dung câu hỏi.')
+
+        try:
+            points = int(question.get('points', 0))
+        except (TypeError, ValueError):
+            points = 0
+        if points <= 0:
+            errors.append(f'Câu {question_id} thiếu điểm số hợp lệ.')
+
+        if not question.get('suggested_answer'):
+            warnings.append(f'Câu {question_id} chưa có hướng dẫn chấm; giáo viên nên bổ sung trước khi lưu.')
+        elif is_missing_formula_placeholder(question.get('suggested_answer')):
+            errors.append(f'Câu {question_id} còn placeholder công thức trong hướng dẫn chấm.')
+
+    return errors, warnings
+
+
 def get_exam_import_max_pages():
     try:
         return max(1, min(30, int(os.environ.get('EXAM_IMPORT_MAX_PAGES', '20'))))
     except ValueError:
         return 20
+
+
+def build_essay_file_parse_prompt(file_content, expected_numbers, class_obj, source_label, has_page_images=False):
+    expected_line = (
+        f"Số câu/bài hệ thống phát hiện trong {source_label}: {len(expected_numbers)} "
+        f"({', '.join('Câu ' + str(number) for number in expected_numbers[:60])})."
+        if expected_numbers else
+        "Hệ thống chưa đếm chắc được số câu/bài; hãy parse toàn bộ câu hỏi tự luận nhìn thấy trong nội dung."
+    )
+    image_instruction = (
+        "\n- Hệ thống có gửi kèm ảnh các trang đề. Hãy ưu tiên đọc ảnh trang vì ảnh giữ đúng công thức, phân số, căn, hệ phương trình và hình học."
+        if has_page_images else
+        "\n- Nếu không có ảnh trang kèm theo, hãy parse dựa trên phần text trích xuất và báo thiếu nếu công thức không đọc được."
+    )
+
+    return f"""Bạn là bộ chuyển đổi đề tự luận từ {source_label} sang JSON cho hệ thống thi trực tuyến.
+
+Ngữ cảnh lớp:
+- Môn: {class_obj.get('subject', '')}
+- Khối: {class_obj.get('grade', '')}
+
+{expected_line}
+
+YÊU CẦU BẮT BUỘC:
+- Chỉ lấy các câu/bài tự luận, bài toán yêu cầu trình bày, chứng minh, giải thích hoặc tính toán.
+- Không bỏ sót câu/bài nào có dạng "Câu số" hoặc "Bài số".
+- Giữ nguyên nội dung Toán, ký hiệu và công thức đọc được; nếu viết lại công thức, dùng LaTeX inline dạng \\(...\\).
+- Nếu đề có nhiều ý a), b), c), hãy giữ chung trong đúng câu/bài đó, không tách nhầm thành câu mới nếu file không đánh số câu mới.
+- Nếu trong file có điểm từng câu/ý, lấy đúng điểm. Nếu file không có điểm, đặt mỗi câu 10 điểm.
+- Nếu PDF chỉ có đề và KHÔNG có đáp án, hãy tự tạo "suggested_answer" là hướng dẫn chấm nháp: các bước giải chính, công thức cần dùng, kết quả cần đạt, lỗi thường gặp. Viết đủ chi tiết để AI chấm bài dựa vào đó, nhưng không lan man.
+- Nếu PDF có đáp án/hướng dẫn chấm sẵn, ưu tiên dùng đúng nội dung đó.
+- Không tự bịa dữ kiện không có trong đề. Nếu một công thức/dữ kiện quan trọng không đọc được thì để trống phần đó và ghi rõ trong suggested_answer để giáo viên kiểm tra.
+- TUYỆT ĐỐI không được điền placeholder như "[CÔNG THỨC BỊ THIẾU]", "[MISSING_FORMULA]", "công thức bị thiếu" vào question hoặc suggested_answer.
+- Khi trả JSON có LaTeX, mọi dấu gạch chéo phải escape đúng JSON: viết "\\\\sqrt{{x}}", "\\\\frac{{a}}{{b}}", "\\\\(x^2\\\\)", không viết "\\sqrt{{x}}" hoặc "\\(x^2\\)".
+- Chỉ trả về JSON hợp lệ, không markdown, không ```json.
+{image_instruction}
+
+Schema:
+{{
+  "questions": [
+    {{
+      "id": 1,
+      "question": "Nội dung câu hỏi tự luận",
+      "points": 10,
+      "suggested_answer": "Hướng dẫn chấm hoặc đáp án gợi ý do AI tạo nếu file không có đáp án"
+    }}
+  ]
+}}
+
+NỘI DUNG TEXT ĐÃ TRÍCH XUẤT TỪ {source_label.upper()}:
+{file_content[:18000]}
+"""
 
 
 def build_exam_file_parse_prompt(file_content, expected_numbers, class_obj, source_label, has_page_images=False):
@@ -2709,6 +2926,172 @@ def teacher_create_essay(class_id=None):
         return redirect(url_for('teacher_dashboard'))
 
     if request.method == 'POST':
+        if request.form.get('confirm_essay_import') == 'yes':
+            title = request.form.get('title', '').strip()
+            description = request.form.get('description', '').strip()
+            time_limit_raw = request.form.get('time_limit', '0').strip()
+            subject = request.form.get('subject', '').strip() or class_obj.get('subject', '')
+            grade = request.form.get('grade', '').strip() or class_obj.get('grade', '')
+            parse_errors = json.loads(request.form.get('parse_errors_json') or '[]')
+            if parse_errors:
+                flash('Đề import còn lỗi parse nên chưa thể lưu. Vui lòng quay lại kiểm tra file đề.', 'error')
+                return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+            question_texts = request.form.getlist('question[]')
+            points_list = request.form.getlist('points[]')
+            suggested_list = request.form.getlist('suggested_answer[]')
+
+            questions = []
+            for index, question_text in enumerate(question_texts):
+                question_text = question_text.strip()
+                if not question_text:
+                    continue
+                try:
+                    points = int(points_list[index]) if index < len(points_list) else 10
+                except ValueError:
+                    points = 10
+                suggested_answer = (
+                    suggested_list[index].strip()
+                    if index < len(suggested_list) else ''
+                )
+                questions.append({
+                    'id': len(questions) + 1,
+                    'question': question_text,
+                    'points': max(1, min(100, points)),
+                    'suggested_answer': suggested_answer
+                })
+
+            validation_errors, validation_warnings = validate_imported_essay_questions(questions, '')
+            blocking_errors = [
+                error for error in validation_errors
+                if 'hướng dẫn chấm' not in error
+            ]
+            if blocking_errors:
+                flash('Đề tự luận chưa hợp lệ: ' + ' '.join(blocking_errors[:3]), 'error')
+                return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+            if validation_warnings:
+                flash('Đề đã lưu, nhưng giáo viên nên kiểm tra thêm hướng dẫn chấm trước khi dùng.', 'warning')
+
+            if not title:
+                flash('Vui lòng nhập tiêu đề đề kiểm tra.', 'error')
+                return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+            try:
+                time_limit = max(0, int(time_limit_raw or 0))
+            except ValueError:
+                flash('Thời gian làm bài phải là số phút hợp lệ.', 'error')
+                return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+            new_exam = {
+                'id': str(uuid.uuid4()),
+                'title': title,
+                'description': description,
+                'type': 'essay',
+                'teacher_id': session.get('exam_user_id'),
+                'class_id': class_id,
+                'created_at': datetime.now().strftime("%d/%m/%Y %H:%M"),
+                'time_limit': time_limit,
+                'subject': subject,
+                'grade': grade,
+                'status': 'active',
+                'essay_questions': questions
+            }
+
+            exams = load_exam_exams()
+            exams.insert(0, new_exam)
+            save_exam_exams(exams)
+
+            flash(f'Đã tạo đề tự luận từ PDF với {len(questions)} câu.', 'success')
+            return redirect(url_for('teacher_class_detail', class_id=class_id))
+
+        if 'essay_file' in request.files:
+            import_file = request.files['essay_file']
+            if not import_file or not import_file.filename:
+                flash('Vui lòng chọn file PDF.', 'error')
+                return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+            original_filename = import_file.filename
+            file_ext = original_filename.rsplit('.', 1)[1].lower() if '.' in original_filename else ''
+            if file_ext != 'pdf':
+                flash('Chức năng import đề tự luận hiện chỉ nhận PDF. Vui lòng xuất Word/WPS sang PDF rồi upload lại.', 'error')
+                return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+            temp_path = None
+            try:
+                temp_filename = f"essay_import_{uuid.uuid4()}_{secure_filename(original_filename)}"
+                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], temp_filename)
+                import_file.save(temp_path)
+
+                source_label = 'file PDF'
+                import_warnings = []
+                max_pages = get_exam_import_max_pages()
+
+                file_content = extract_text_from_pdf(temp_path)
+                if file_content.startswith('Lỗi khi đọc PDF'):
+                    flash(file_content, 'error')
+                    return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+                page_images = render_pdf_pages_for_ai(temp_path, max_pages=max_pages, zoom=1.8)
+                if not page_images:
+                    flash('Server chưa render được PDF thành ảnh nên chưa thể import đề có công thức.', 'error')
+                    return redirect(url_for('teacher_create_essay', class_id=class_id))
+                import_warnings.append(
+                    f'Server đã render {len(page_images)} trang PDF thành ảnh để AI đọc công thức và nội dung tự luận.'
+                )
+
+                if not (file_content or page_images):
+                    flash(f'Không đọc được nội dung từ {source_label}.', 'error')
+                    return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+                expected_numbers = extract_essay_question_numbers_from_text(file_content)
+                prompt = build_essay_file_parse_prompt(
+                    file_content,
+                    expected_numbers,
+                    class_obj,
+                    source_label,
+                    has_page_images=bool(page_images)
+                )
+                prompt_parts = [prompt]
+
+                if page_images:
+                    image_note = (
+                        f"\n\nHệ thống gửi kèm {len(page_images)} ảnh trang từ {source_label}. "
+                        "Hãy đọc trực tiếp ảnh trang để giữ đúng công thức, hình vẽ và các ý nhỏ."
+                    )
+                    prompt_parts = page_images + [prompt + image_note]
+
+                response = model.generate_content(prompt_parts)
+                ai_text = get_gemini_text(
+                    response,
+                    'AI chưa trả về dữ liệu câu hỏi tự luận. Vui lòng thử lại với PDF rõ nét hơn.'
+                )
+                raw_questions_data = parse_ai_json_response(ai_text)
+                questions, normalize_warnings = normalize_imported_essay_questions(raw_questions_data)
+                parse_errors, parse_warnings = validate_imported_essay_questions(questions, file_content, source_label)
+                parse_warnings = import_warnings + normalize_warnings + parse_warnings
+
+                if not questions:
+                    flash(f'AI chưa parse được câu hỏi tự luận nào từ {source_label}.', 'error')
+                    return redirect(url_for('teacher_create_essay', class_id=class_id))
+
+                return render_template(
+                    'exam_system/teacher/preview_essay_questions.html',
+                    questions=questions,
+                    class_obj=class_obj,
+                    parse_errors=parse_errors,
+                    parse_warnings=parse_warnings,
+                    expected_question_count=len(expected_numbers),
+                    can_save=not parse_errors)
+            except Exception as e:
+                flash(f'Lỗi khi parse file tự luận: {sanitize_gemini_error(e)}', 'error')
+            finally:
+                if temp_path:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+
         title = request.form.get('title', '').strip()
         description = request.form.get('description', '').strip()
         time_limit = request.form.get('time_limit', '0')
@@ -4372,7 +4755,11 @@ def is_short_topic_text(source_text):
 
 
 def get_curated_mindmap_title(source_text, title):
-    if is_sqrt_topic(source_text, title):
+    has_conversation_context = (
+        'NGỮ CẢNH CUỘC TRÒ CHUYỆN' in str(source_text or '')
+        or 'Lượt ' in str(source_text or '')
+    )
+    if is_sqrt_topic(source_text, title) and not has_conversation_context:
         return 'Căn bậc hai'
     return title
 
@@ -4573,12 +4960,117 @@ def build_math9_exam_mindmap_branches():
     ]
 
 
+def get_mindmap_source_sentences(source_text):
+    sentences = []
+    skip_next_topic_line = False
+    for line in str(source_text or '').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        folded_line = fold_search_text(line)
+        if folded_line.startswith('chu de nguoi dung muon tao so do'):
+            skip_next_topic_line = True
+            continue
+        if folded_line.startswith('ngu canh cuoc tro chuyen') or folded_line.startswith('noi dung'):
+            continue
+        if skip_next_topic_line:
+            skip_next_topic_line = False
+            continue
+
+        line = re.sub(r'^Lượt\s+\d+\s*-\s*(Học sinh|AI)\s*:\s*', '', line, flags=re.IGNORECASE)
+        for sentence in re.split(r'[.\n;]+', line):
+            sentence = sentence.strip()
+            folded_sentence = fold_search_text(sentence)
+            if len(sentence) < 8:
+                continue
+            if folded_sentence in {'hoc sinh', 'ai'}:
+                continue
+            sentences.append(sentence)
+
+    return sentences
+
+
+def build_sentence_mindmap_branches(sentences, limit=6):
+    branches = [
+        {
+            'title': safe_text(sentence, f'Ý {index + 1}')[:42],
+            'note': 'Ý cụ thể trong cuộc trò chuyện cần bám sát',
+            'formula': '',
+            'children': [
+                {'title': 'Dữ kiện hoặc từ khóa liên quan', 'formula': ''},
+                {'title': 'Công thức hoặc cách làm nối với ý này', 'formula': ''},
+                {'title': 'Điểm dễ nhầm cần kiểm tra', 'formula': ''}
+            ]
+        }
+        for index, sentence in enumerate(sentences[:limit])
+    ]
+    support_branches = [
+        {
+            'title': 'Dữ kiện của đề bài',
+            'note': 'Tách rõ điều đã cho, biến số và yêu cầu cần tìm',
+            'formula': '',
+            'children': [
+                {'title': 'Gạch chân số liệu và biểu thức xuất hiện', 'formula': ''},
+                {'title': 'Xác định biến hoặc đại lượng chính', 'formula': ''},
+                {'title': 'Viết lại yêu cầu bằng một câu ngắn', 'formula': ''}
+            ]
+        },
+        {
+            'title': 'Công thức dùng trực tiếp',
+            'note': 'Chỉ ghi công thức thật sự liên quan đến bài đang bàn',
+            'formula': '',
+            'children': [
+                {'title': 'Điều kiện áp dụng công thức', 'formula': ''},
+                {'title': 'Ký hiệu cần thống nhất trước khi làm', 'formula': ''},
+                {'title': 'Công thức phụ nếu phải biến đổi', 'formula': ''}
+            ]
+        },
+        {
+            'title': 'Hướng giải theo bài này',
+            'note': 'Sắp xếp thao tác giải theo đúng dữ kiện đã trao đổi',
+            'formula': '',
+            'children': [
+                {'title': 'Bước đầu tiên cần làm', 'formula': ''},
+                {'title': 'Biến đổi chính cần kiểm tra', 'formula': ''},
+                {'title': 'Kết luận quay lại yêu cầu đề', 'formula': ''}
+            ]
+        },
+        {
+            'title': 'Lỗi sai cần tránh',
+            'note': 'Các điểm dễ làm sai với đúng dạng bài đang hỏi',
+            'formula': '',
+            'children': [
+                {'title': 'Không bỏ điều kiện xác định', 'formula': ''},
+                {'title': 'Không thay số trước khi rút gọn nếu đề yêu cầu', 'formula': ''},
+                {'title': 'Kiểm tra lại mẫu, dấu và miền giá trị', 'formula': ''}
+            ]
+        }
+    ]
+    existing_titles = {fold_search_text(branch.get('title')) for branch in branches}
+    for branch in support_branches:
+        if len(branches) >= min(5, limit):
+            break
+        if fold_search_text(branch.get('title')) in existing_titles:
+            continue
+        branches.append(branch)
+    return branches
+
+
 def build_fallback_mindmap_branches(source_text, title):
     topic = safe_text(title or source_text, 'Nội dung học tập')
     folded = fold_search_text(f'{topic} {source_text}')
+    sentences = get_mindmap_source_sentences(source_text)
+    has_conversation_context = (
+        'NGỮ CẢNH CUỘC TRÒ CHUYỆN' in source_text
+        or 'Lượt ' in source_text
+    )
 
     if is_math_exam_review_source(source_text, title):
         return build_math9_exam_mindmap_branches()
+
+    if has_conversation_context and len(sentences) >= 2:
+        return build_sentence_mindmap_branches(sentences)
 
     if any(keyword in folded for keyword in ['can bac 2', 'can thuc', 'sqrt']):
         return [
@@ -4644,20 +5136,8 @@ def build_fallback_mindmap_branches(source_text, title):
             }
         ]
 
-    sentences = [s.strip() for s in re.split(r'[.\n;:]+', source_text) if s.strip()]
     if len(sentences) >= 3:
-        return [
-            {
-                'title': safe_text(sentence, f'Ý {index + 1}')[:42],
-                'note': 'Ý chính cần ghi nhớ',
-                'formula': '',
-                'children': [
-                    {'title': 'Từ khóa quan trọng', 'formula': ''},
-                    {'title': 'Liên hệ với bài học', 'formula': ''}
-                ]
-            }
-            for index, sentence in enumerate(sentences[:5])
-        ]
+        return build_sentence_mindmap_branches(sentences, limit=5)
 
     return [
         {
@@ -4783,9 +5263,9 @@ def normalize_mindmap_data(raw_data, source_text):
 
     if len(normalized) < 3:
         sentences = [
-            s.strip()
-            for s in re.split(r'[.\n]+', source_text)
-            if s.strip() and fold_search_text(s.strip()) != fold_search_text(title)
+            sentence
+            for sentence in get_mindmap_source_sentences(source_text)
+            if fold_search_text(sentence) != fold_search_text(title)
         ]
         for index, sentence in enumerate(sentences[:5 - len(normalized)]):
             normalized.append({
@@ -4826,6 +5306,35 @@ def get_mindmap_variant(data):
         ['#0369a1', '#b45309', '#15803d', '#c026d3', '#b91c1c', '#047857', '#4338ca']
     ]
     return variants[seed % len(variants)], palettes[(seed // 7) % len(palettes)], seed
+
+
+def build_mindmap_source_text(topic, chat_history):
+    relevant_history = [
+        item for item in (chat_history or [])
+        if not item.get('mindmap')
+    ][-8:]
+    parts = []
+
+    if topic:
+        parts.append(f'CHỦ ĐỀ NGƯỜI DÙNG MUỐN TẠO SƠ ĐỒ:\n{topic}')
+
+    if relevant_history:
+        conversation_lines = []
+        for index, item in enumerate(relevant_history, 1):
+            user_text = str(item.get('user', '')).strip()
+            bot_text = str(item.get('bot', '')).strip()
+            if user_text:
+                conversation_lines.append(f'Lượt {index} - Học sinh: {user_text[:1500]}')
+            if bot_text:
+                conversation_lines.append(f'Lượt {index} - AI: {bot_text[:2200]}')
+
+        if conversation_lines:
+            parts.append(
+                'NGỮ CẢNH CUỘC TRÒ CHUYỆN CẦN BÁM SÁT:\n'
+                + '\n'.join(conversation_lines)
+            )
+
+    return '\n\n'.join(parts).strip()
 
 
 def wrap_svg_text(text, max_chars):
@@ -5341,11 +5850,7 @@ def create_chatbot_mindmap():
     topic = request.form.get('mindmap_topic', '').strip()
     is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
 
-    history_text = '\n'.join(
-        f"Học sinh: {item.get('user', '')}\nAI: {item.get('bot', '')}"
-        for item in chat_history[-6:]
-    )
-    source_text = topic or history_text
+    source_text = build_mindmap_source_text(topic, chat_history)
 
     if not source_text.strip():
         message = 'Em hãy hỏi hoặc trao đổi một nội dung trước, sau đó bấm Tạo sơ đồ.'
@@ -5371,6 +5876,10 @@ Yêu cầu sư phạm:
 - Luôn viết tiếng Việt có dấu đầy đủ trong mọi trường chữ: title, summary, note, children.title.
 - Tóm tắt đúng kiến thức đã trao đổi, không thêm đáp án giải hoàn chỉnh nếu là bài tập.
 - Sơ đồ phải BÁM SÁT nội dung học thuật trong phần NỘI DUNG, ưu tiên các mục "Các mạch kiến thức", "Công thức cần nhớ", "Phương pháp giải", "Lỗi sai", "Gợi ý nhánh sơ đồ tư duy" nếu có.
+- Nếu có bài toán cụ thể, title phải nêu đúng dạng bài cụ thể, ví dụ "Rút gọn biểu thức căn thức", "Chứng minh hình học về tiếp tuyến", không chỉ ghi tên chương rộng như "Căn bậc hai".
+- Nếu NỘI DUNG có một đề bài/câu hỏi/bài toán cụ thể, sơ đồ phải đi thẳng vào chính đề bài đó: dữ kiện đã cho, yêu cầu cần tìm/chứng minh, công thức liên quan trực tiếp, hướng giải từng ý, điều kiện xác định và lỗi sai dễ mắc của bài đó.
+- Nếu người dùng nhập CHỦ ĐỀ nhưng cuộc trò chuyện có NGỮ CẢNH, hãy dùng chủ đề chỉ để đặt trọng tâm; tuyệt đối không bỏ qua đề bài, dữ kiện, công thức và trao đổi cụ thể trong ngữ cảnh.
+- Tránh tạo sơ đồ kiểu giáo khoa chung chung như chỉ nêu "khái niệm", "tính chất", "ví dụ" nếu cuộc trò chuyện đang nói về một bài cụ thể. Mỗi nhánh phải trả lời được: phần này giúp giải/hiểu đúng điểm nào của đề bài đang bàn.
 - Nếu NỘI DUNG là đề kiểm tra Toán hoặc bản phân tích đề Toán: chỉ tạo nhánh về chương kiến thức, dạng bài, công thức, phương pháp giải và lỗi sai. TUYỆT ĐỐI không tạo nhánh chung chung như quản lí thời gian, đọc kỹ đề, phân bổ thời gian, lịch học cá nhân, nghỉ ngơi, sức khỏe tinh thần, đồ dùng cá nhân.
 - Mỗi nhánh phải có nội dung cụ thể, rõ môn học, rõ dạng bài hoặc công thức; tránh các nhánh mơ hồ như "lý thuyết cơ bản", "dạng bài tập" nếu không kèm chi tiết.
 - Tạo 6 đến 8 nhánh chính, mỗi nhánh có 3 đến 5 ý con để sơ đồ đủ chi tiết.
@@ -5425,13 +5934,27 @@ NỘI DUNG:
         f.write(html_content)
 
     mindmap_url = url_for('static', filename=f'chatbot_mindmaps/{filename}')
+    mindmap_payload = {
+        'url': mindmap_url,
+        'title': mindmap_data.get('title', 'Sơ đồ tư duy'),
+        'filename': filename
+    }
+    chat_history = session.get('chat_history', [])
+    chat_history.append({
+        'user': f'Tạo sơ đồ tư duy: {topic}' if topic else 'Tạo sơ đồ tư duy từ cuộc trò chuyện',
+        'bot': f"Đã tạo sơ đồ tư duy: {mindmap_payload['title']}",
+        'mindmap': mindmap_payload,
+        'timestamp': datetime.now().strftime("%H:%M")
+    })
+    session['chat_history'] = chat_history
+    session.modified = True
 
     if is_ajax_request:
         return jsonify({
             'success': True,
-            'url': mindmap_url,
-            'title': mindmap_data.get('title', 'Sơ đồ tư duy'),
-            'filename': filename
+            'url': mindmap_payload['url'],
+            'title': mindmap_payload['title'],
+            'filename': mindmap_payload['filename']
         })
 
     return redirect(mindmap_url)

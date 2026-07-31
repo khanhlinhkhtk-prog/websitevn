@@ -17,6 +17,48 @@
 
     <div class="row">
         <div class="col-md-10 offset-md-1">
+            <div class="card shadow mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-file-pdf"></i> Import Đề Tự Luận Từ PDF
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        PDF chỉ cần có nội dung đề. Nếu file không có đáp án, AI sẽ tạo hướng dẫn chấm nháp để giáo viên kiểm tra ở bước preview trước khi lưu.
+                    </div>
+
+                    <form method="POST" enctype="multipart/form-data" id="essayUploadForm">
+                        <div class="form-group">
+                            <label for="essay_file">
+                                <i class="fas fa-file-pdf"></i> Chọn File PDF (.pdf) <span class="text-danger">*</span>
+                            </label>
+                            <div class="custom-file">
+                                <input type="file"
+                                       class="custom-file-input"
+                                       id="essay_file"
+                                       name="essay_file"
+                                       accept=".pdf"
+                                       required>
+                                <label class="custom-file-label" for="essay_file">Chọn file .pdf...</label>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="fas fa-magic"></i> Parse File Bằng AI
+                        </button>
+                    </form>
+
+                    <div id="essayUploadLoading" class="text-center mt-4" style="display: none;">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="sr-only">Loading...</span>
+                        </div>
+                        <p class="mt-2">AI đang đọc PDF và tạo đề tự luận...</p>
+                    </div>
+                </div>
+            </div>
+
             <form method="POST" id="essayForm">
                 <!-- Thông tin chung -->
                 <div class="card shadow mb-4">
@@ -217,6 +259,15 @@
 
 <script>
 let questionCount = 1;
+
+document.getElementById('essay_file').addEventListener('change', function(e) {
+    var fileName = e.target.files[0]?.name || 'Chọn file .pdf...';
+    document.querySelector('label[for="essay_file"].custom-file-label').textContent = fileName;
+});
+
+document.getElementById('essayUploadForm').addEventListener('submit', function() {
+    document.getElementById('essayUploadLoading').style.display = 'block';
+});
 
 function addQuestion() {
     const container = document.getElementById('questionsContainer');
