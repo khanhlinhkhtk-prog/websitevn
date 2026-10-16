@@ -16,6 +16,7 @@ from flask import flash
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from threading import Lock
+from contextlib import contextmanager
 
 load_dotenv()
 app = Flask(__name__)
@@ -26,7 +27,8 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 def close_exam_db_connection(error=None):
     conn = getattr(g, "_exam_db_conn", None)
     if conn is not None:
-        conn.close()
+        g._exam_db_conn = None
+        release_exam_db_connection(conn)
 
 # Cấu hình thư mục upload
 UPLOAD_FOLDER = os.path.join('static', 'uploads')
@@ -348,6 +350,8 @@ ADMIN_PASSWORD_HASH = generate_password_hash(
 )
 
 _exam_store_initialized = False
+_exam_db_pool = None
+_exam_db_pool_lock = Lock()
 
 
 # Helper functions
@@ -376,14 +380,54 @@ def create_exam_db_connection():
     return psycopg2.connect(dsn, **kwargs)
 
 
+def acquire_exam_db_connection():
+    """Reuse TLS/database sessions instead of reconnecting for every page."""
+    global _exam_db_pool
+    if _exam_db_pool is None:
+        with _exam_db_pool_lock:
+            if _exam_db_pool is None:
+                from psycopg2.pool import ThreadedConnectionPool
+                kwargs = {"connect_timeout": 10}
+                dsn = normalize_database_url(DATABASE_URL)
+                if "sslmode=" not in dsn:
+                    kwargs["sslmode"] = DATABASE_SSLMODE
+                _exam_db_pool = ThreadedConnectionPool(
+                    1, 8, dsn, **kwargs
+                )
+    conn = _exam_db_pool.getconn()
+    conn.autocommit = True
+    return conn
+
+
+def release_exam_db_connection(conn):
+    if _exam_db_pool is not None:
+        _exam_db_pool.putconn(conn, close=bool(conn.closed))
+    else:
+        conn.close()
+
+
+@contextmanager
+def exam_db_session(transaction=True):
+    conn = get_exam_db_connection()
+    try:
+        if transaction:
+            with conn:
+                yield conn
+        else:
+            yield conn
+    finally:
+        if not has_request_context():
+            release_exam_db_connection(conn)
+
+
 def get_exam_db_connection():
     if has_request_context():
         conn = getattr(g, "_exam_db_conn", None)
         if conn is None or conn.closed:
-            conn = create_exam_db_connection()
+            conn = acquire_exam_db_connection()
             g._exam_db_conn = conn
         return conn
-    return create_exam_db_connection()
+    return acquire_exam_db_connection()
 
 
 def get_exam_collection_cache():
@@ -401,7 +445,7 @@ def ensure_exam_store_table():
     if _exam_store_initialized or not exam_db_enabled():
         return
 
-    with get_exam_db_connection() as conn:
+    with exam_db_session() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -444,7 +488,7 @@ def preload_exam_collections(cache):
 
     ensure_exam_store_table()
     collection_names = list(EXAM_COLLECTION_CONFIG.keys())
-    with get_exam_db_connection() as conn:
+    with exam_db_session(transaction=False) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -495,13 +539,16 @@ def load_exam_collection(collection, path, fallback, expected_type=None):
             cache[collection] = data
         return data
 
-    if cache is not None:
+    if cache is not None and request.endpoint not in {
+        'exam_student_login', 'exam_teacher_login', 'exam_parent_login',
+        'exam_student_register',
+    }:
         preload_exam_collections(cache)
         if collection in cache:
             return cache[collection]
 
     ensure_exam_store_table()
-    with get_exam_db_connection() as conn:
+    with exam_db_session(transaction=False) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT payload FROM exam_system_store WHERE collection = %s",
@@ -541,7 +588,7 @@ def save_exam_collection(collection, path, data):
         return
 
     ensure_exam_store_table()
-    with get_exam_db_connection() as conn:
+    with exam_db_session() as conn:
         with conn.cursor() as cur:
             from psycopg2.extras import Json
             cur.execute(

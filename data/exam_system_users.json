@@ -268,7 +268,7 @@
     {
       "id": "teacher_003",
       "username": "gvvan",
-      "password": "scrypt:32768:8:1$d0uC9ixnhclTRiMq$e7c2f11b85e71fe9271dfaf1353b3e9c31707601d33735e69075f99cae9d7dff25d134aa94ed04cd456422c14c513f9eb81cd4cb6898a32cc249b170748e69b7",
+      "password": "scrypt:32768:8:1$Ty36AeOtT4RW8cQd$96638ae21684b8db472e0a439466087e54c2606d2d91880ca89f3a3463c195cfb554a53b64bbec348a201db392b18a3138f3292c0634bdfc556a8c0626318445",
       "full_name": "Lê Văn Nam",
       "subject": "Ngữ Văn",
       "email": "lvnm@school.edu.vn"
