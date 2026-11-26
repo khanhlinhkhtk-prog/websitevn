@@ -355,6 +355,16 @@ _exam_db_pool_lock = Lock()
 
 
 # Helper functions
+class ExamStorageUnavailable(Exception):
+    """The configured exam database cannot be reached."""
+
+
+@app.errorhandler(ExamStorageUnavailable)
+def handle_exam_storage_unavailable(error):
+    app.logger.error("Exam database is unavailable: %s", error)
+    return render_template('exam_system/storage_unavailable.html'), 503
+
+
 def exam_db_enabled():
     return bool(DATABASE_URL)
 
@@ -383,18 +393,22 @@ def create_exam_db_connection():
 def acquire_exam_db_connection():
     """Reuse TLS/database sessions instead of reconnecting for every page."""
     global _exam_db_pool
-    if _exam_db_pool is None:
-        with _exam_db_pool_lock:
-            if _exam_db_pool is None:
-                from psycopg2.pool import ThreadedConnectionPool
-                kwargs = {"connect_timeout": 10}
-                dsn = normalize_database_url(DATABASE_URL)
-                if "sslmode=" not in dsn:
-                    kwargs["sslmode"] = DATABASE_SSLMODE
-                _exam_db_pool = ThreadedConnectionPool(
-                    1, 8, dsn, **kwargs
-                )
-    conn = _exam_db_pool.getconn()
+    from psycopg2 import OperationalError
+    from psycopg2.pool import PoolError, ThreadedConnectionPool
+    try:
+        if _exam_db_pool is None:
+            with _exam_db_pool_lock:
+                if _exam_db_pool is None:
+                    kwargs = {"connect_timeout": 10}
+                    dsn = normalize_database_url(DATABASE_URL)
+                    if "sslmode=" not in dsn:
+                        kwargs["sslmode"] = DATABASE_SSLMODE
+                    _exam_db_pool = ThreadedConnectionPool(
+                        1, 8, dsn, **kwargs
+                    )
+        conn = _exam_db_pool.getconn()
+    except (OperationalError, PoolError) as exc:
+        raise ExamStorageUnavailable(str(exc)) from exc
     conn.autocommit = True
     return conn
 

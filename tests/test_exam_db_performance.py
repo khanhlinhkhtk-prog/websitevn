@@ -1,10 +1,35 @@
 import unittest
+import os
 from unittest.mock import MagicMock, patch
+from psycopg2 import OperationalError
 
+os.environ.setdefault('GOOGLE_API_KEY', 'test-key')
 import app as website
 
 
 class ExamDatabaseTests(unittest.TestCase):
+    def test_login_database_outage_shows_service_error(self):
+        login_paths = (
+            '/exam_system/student_login',
+            '/exam_system/teacher_login',
+            '/exam_system/parent_login',
+        )
+        with patch.object(website, 'DATABASE_URL', 'postgresql://unavailable/db'), \
+                patch.object(website, '_exam_db_pool', None), \
+                patch.object(website, '_exam_store_initialized', False), \
+                patch('psycopg2.pool.ThreadedConnectionPool',
+                      side_effect=OperationalError('could not resolve host')):
+            client = website.app.test_client()
+            for path in login_paths:
+                with self.subTest(path=path):
+                    response = client.post(path, data={
+                        'username': 'qa_nonexistent',
+                        'password': 'qa_invalid',
+                    })
+                    self.assertEqual(response.status_code, 503)
+                    self.assertIn('Không thể kết nối dữ liệu đăng nhập',
+                                  response.get_data(as_text=True))
+
     def test_request_reuses_connection_and_returns_it_to_pool(self):
         pool = MagicMock()
         conn = pool.getconn.return_value
